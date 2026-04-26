@@ -1,0 +1,11 @@
+target/
+data/paper_state.json
+data/*.db
+scripts/__pycache__/
+__pycache__/
+*.pyc
+tmp/research_cache/
+tmp/research_runs/
+tmp/pylibs/
+tmp/pdfs/
+tmp/strategy_study_*.json

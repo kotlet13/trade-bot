@@ -1,0 +1,3920 @@
+# Strategy Test Log
+
+## Naming
+
+- `Txxx` = unique test id for this strategy-testing session
+- `Status` values: `done`, `in_progress`, `planned`
+
+## Entries
+
+### T001
+
+- Timestamp: `2026-04-22 21:54-21:59 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Paper execution / UI regression`
+- Goal: Verify and then fix the `Prefill trade -> Submit paper order` flow.
+- Inputs:
+  - Browser E2E on `http://localhost:8081/`
+  - Symbol focus: `ETHUSDT`
+- Procedure:
+  - Reproduced `Not enough paper cash` after `Prefill trade`.
+  - Patched fee-aware market-buy sizing in backend.
+  - Rebuilt Docker image and reran the same browser flow.
+- Result:
+  - Bug reproduced first, then fixed.
+  - Final E2E result: `BUY ETHUSDT @ 2396.9200 executed as a paper market trade.`
+  - Verified portfolio row and trade log row appeared in UI.
+  - Paper account reset after test.
+- Notes:
+  - Remaining minor browser issue: `favicon.ico` 404 only.
+
+### T002
+
+- Timestamp: `2026-04-22 22:06 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Current replay baseline`
+- Goal: Capture the bot's existing `/api/replay` baseline before any broader tuning.
+- Inputs:
+  - Endpoint: `/api/replay`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Window: existing in-app replay (`720 x 15m`, `32` forward candles)
+- Result:
+  - `BTCUSDT`: `ready=1`, `avg_r=0.507`
+  - `ETHUSDT`: `ready=2`, `avg_r=1.000`
+  - `SOLUSDT`: `ready=3`, `avg_r=0.974`
+  - `BNBUSDT`: `ready=14`, `avg_r=-0.033`
+- Notes:
+  - Baseline suggests frequency concentration and weakness on `BNBUSDT`.
+
+### T003
+
+- Timestamp: `2026-04-22 22:08-22:11 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Replay parity harness`
+- Goal: Validate that the local study harness matches the current Rust replay logic before longer sweeps.
+- Inputs:
+  - Script: [scripts/strategy_study.py](/C:/Users/novsakanze/github/trade-bot/scripts/strategy_study.py:1)
+  - Command: `python scripts/strategy_study.py --trigger-limit 720`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+- Result:
+  - `baseline` gross totals matched the in-app replay behavior.
+  - Additional `net_R` showed that fees compress the baseline from `gross_total_r=4.964` to `net_total_r=0.175`.
+- Artifacts:
+  - [tmp/strategy_study_720.json](/C:/Users/novsakanze/github/trade-bot/tmp/strategy_study_720.json:1)
+- Notes:
+  - This established the harness as reliable enough for longer sweeps.
+
+### T004
+
+- Timestamp: `2026-04-22 22:11-22:15 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Mid-window sweep`
+- Goal: Test current strategy and stricter variants over a materially longer window.
+- Inputs:
+  - Script: [scripts/strategy_study.py](/C:/Users/novsakanze/github/trade-bot/scripts/strategy_study.py:1)
+  - Command: `python scripts/strategy_study.py --trigger-limit 4000 --forward-candles 32`
+  - Configs:
+    - `baseline`
+    - `tight_pullback`
+    - `strong_trigger`
+    - `balanced`
+    - `balanced_serial`
+- Result:
+  - All tested configs were net negative after fees on aggregate.
+  - Best aggregate result in this sweep: `strong_trigger`, `net_total_r=-7.733`.
+  - `baseline` stayed gross-positive (`gross_total_r=10.109`) but net-negative (`net_total_r=-16.059`), which exposed fee drag and overtrading.
+- Artifacts:
+  - [tmp/strategy_study_4000.json](/C:/Users/novsakanze/github/trade-bot/tmp/strategy_study_4000.json:1)
+
+### T005
+
+- Timestamp: `2026-04-22 22:15-22:25 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Longer-window stability sweep`
+- Goal: Check whether any candidate holds up over a broader sample.
+- Inputs:
+  - Script: [scripts/strategy_study.py](/C:/Users/novsakanze/github/trade-bot/scripts/strategy_study.py:1)
+  - Command: `python scripts/strategy_study.py --trigger-limit 8000 --forward-candles 32`
+  - Same config set as `T004`
+- Result:
+  - All configs remained net negative.
+  - Best aggregate result in this sweep: `balanced_serial`, `net_total_r=-13.504`.
+  - `baseline` deteriorated to `net_total_r=-49.859`.
+- Artifacts:
+  - [tmp/strategy_study_8000.json](/C:/Users/novsakanze/github/trade-bot/tmp/strategy_study_8000.json:1)
+- Notes:
+  - Current technique is not stable enough yet for confident live-style paper deployment.
+
+### T006
+
+- Timestamp: `2026-04-22 22:26-22:29 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Timeout sensitivity`
+- Goal: Check whether the fixed `32 x 15m` forward horizon is truncating valid trades too early.
+- Inputs:
+  - Script: [scripts/strategy_study.py](/C:/Users/novsakanze/github/trade-bot/scripts/strategy_study.py:1)
+  - Command: `python scripts/strategy_study.py --trigger-limit 4000 --forward-candles 64`
+  - Same config set as `T004`
+- Result:
+  - Extending hold time helped some symbols, especially `ETHUSDT` and `BNBUSDT`.
+  - Aggregate outcome still stayed net negative for all configs.
+  - Best aggregate result in this sweep: `strong_trigger`, `net_total_r=-6.459`.
+- Artifacts:
+  - [tmp/strategy_study_4000_f64.json](/C:/Users/novsakanze/github/trade-bot/tmp/strategy_study_4000_f64.json:1)
+- Notes:
+  - Timeout length matters, but it is not enough on its own to rescue the current edge.
+
+## Next planned items
+
+### T007
+
+- Timestamp: `2026-04-22 22:31 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Current live-signal scan`
+- Goal: Check whether any symbol currently has a `READY` setup worth a slower paper-trade observation.
+- Inputs:
+  - Endpoint: `/api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+- Result:
+  - `BTCUSDT`: `stage=setup`, `bias=bullish`, `confidence=85`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+- Notes:
+  - No symbol currently meets a clean `READY` condition.
+  - No paper trade was forced from this scan.
+
+### T008
+
+- Status: `planned`
+- Scope: `Paper-trade observation`
+- Goal: If a valid setup exists, place a paper trade, then revisit after `15+` minutes to inspect fills, stops, TP behavior, and position state.
+
+### T009
+
+- Status: `planned`
+- Scope: `Filter expansion`
+- Goal: Test one additional automatable filter inspired by the PDF, most likely `session/time filter` or stricter `market structure` gating.
+
+### T010
+
+- Timestamp: `2026-04-22 22:46 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Heartbeat live-signal scan #1`
+- Goal: Re-scan the watchlist and place one observation paper trade only if a clean `READY` signal exists and the account is flat.
+- Inputs:
+  - Endpoint: `/api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000`
+- Result:
+  - `BTCUSDT`: `stage=setup`, `bias=bullish`, `confidence=85`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+- Notes:
+  - No symbol reached a clean `READY` condition.
+  - No paper trade was opened.
+
+### T011
+
+- Timestamp: `2026-04-22 23:02 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Heartbeat live-signal scan #2`
+- Goal: Re-scan the watchlist and place one observation paper trade only if a clean `READY` signal exists and the account is flat.
+- Inputs:
+  - Endpoint: `/api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000`
+- Result:
+  - `BTCUSDT`: `stage=setup`, `bias=bullish`, `confidence=85`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+- Notes:
+  - `ETHUSDT` and `BNBUSDT` showed stronger last-trigger bodies, but still did not qualify as clean `READY` setups.
+  - No paper trade was opened.
+
+### T012
+
+- Timestamp: `2026-04-22 23:18 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Heartbeat live-signal scan #3`
+- Goal: Re-scan the watchlist and place one observation paper trade only if a clean `READY` signal exists and the account is flat.
+- Inputs:
+  - Endpoint: `/api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000`
+- Result:
+  - `BTCUSDT`: `stage=setup`, `bias=bullish`, `confidence=85`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+- Notes:
+  - `BTCUSDT` still has structure and setup, but the `15m` trigger remains missing.
+  - No paper trade was opened.
+
+### T013
+
+- Timestamp: `2026-04-22 23:34 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Heartbeat live-signal scan #4 + paper-trade entry`
+- Goal: Re-scan the watchlist and, if flat, open one observation paper trade only on a clean `READY` setup.
+- Inputs:
+  - Endpoint: `/api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000`
+- Scan result:
+  - `BTCUSDT`: `stage=ready`, `bias=bullish`, `confidence=95`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+- Action:
+  - Opened one paper long on `BTCUSDT`.
+  - Order response: `BUY BTCUSDT @ 78681.0500 executed as a paper market trade. Quantity was reduced from 0.127012 to 0.126968 because the live price moved before execution.`
+- Position baseline after entry:
+  - `symbol=BTCUSDT`
+  - `qty=0.126968`
+  - `avg_price=78759.7310`
+  - `stop_loss=78114.5514`
+  - `take_profit=79193.1086`
+  - `last=78699.9800`
+  - `market_value=9992.4135`
+  - `unrealized=-7.5865`
+  - `cash≈0`
+- Notes:
+  - `avg_price` is above fill price because fees are included in position cost basis.
+  - Next wakeup should monitor whether the position remains open, and whether `SL/TP` or unrealized PnL changed materially.
+
+### T014
+
+- Timestamp: `2026-04-22 23:50 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Paper-trade observation #1`
+- Goal: Check the first observation trade after roughly `15+` minutes and record any material state change.
+- Inputs:
+  - Endpoint: `/api/dashboard`
+  - Focus position: `BTCUSDT` from `T013`
+- Result:
+  - Position is still open.
+  - `qty=0.126968`
+  - `avg_price=78759.7310`
+  - `current_price=78779.0000`
+  - `stop_loss=78114.5514`
+  - `take_profit=79193.1086`
+  - `unrealized=+2.4465`
+  - `realized=0.0000`
+  - Account still has `0` open orders and `1` trade in log.
+- Live-signal context:
+  - `BTCUSDT` fell from `READY` back to `SETUP`.
+  - `ETHUSDT`, `SOLUSDT`, `BNBUSDT` remain outside clean `READY`.
+- Notes:
+  - This confirms the current trigger can disappear quickly after entry.
+  - No additional paper trade was opened while the observation position remains active.
+
+### T015
+
+- Timestamp: `2026-04-23 00:06 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Paper-trade observation #2`
+- Goal: Re-check the BTCUSDT observation trade after another ~15 minutes and record whether anything material changed.
+- Inputs:
+  - Endpoint: `/api/dashboard`
+  - Focus position: `BTCUSDT` from `T013`
+- Result:
+  - Position is still open.
+  - `qty=0.126968`
+  - `avg_price=78759.7310`
+  - `current_price=78777.6800`
+  - `stop_loss=78114.5514`
+  - `take_profit=79193.1086`
+  - `unrealized=+2.2790`
+  - `realized=0.0000`
+  - Account still has `0` open orders and `1` trade in log.
+- Live-signal context:
+  - `BTCUSDT` remains at `SETUP`, not `READY`.
+  - `ETHUSDT`, `SOLUSDT`, `BNBUSDT` still do not qualify as clean `READY`.
+- Notes:
+  - This scan is directionally unchanged from `T014`: the observation trade remains open, slightly positive, and unsupported by a still-active trigger.
+  - No new paper trade was opened.
+
+### T016
+
+- Timestamp: `2026-04-23 00:22 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Paper-trade observation #3`
+- Goal: Re-check the BTCUSDT observation trade after another ~15 minutes and record whether the position is improving, degrading, or closing.
+- Inputs:
+  - Endpoint: `/api/dashboard`
+  - Focus position: `BTCUSDT` from `T013`
+- Result:
+  - Position is still open.
+  - `qty=0.126968`
+  - `avg_price=78759.7310`
+  - `current_price=78633.2400`
+  - `stop_loss=78114.5514`
+  - `take_profit=79193.1086`
+  - `unrealized=-16.0604`
+  - `realized=0.0000`
+  - Account still has `0` open orders and `1` trade in log.
+- Live-signal context:
+  - `BTCUSDT` remains at `SETUP`, not `READY`.
+  - `ETHUSDT`, `SOLUSDT`, `BNBUSDT` still do not qualify as clean `READY`.
+- Notes:
+  - The observation trade flipped from slightly positive to moderately negative while remaining between stop and take-profit.
+  - No new paper trade was opened.
+
+### T017
+
+- Timestamp: `2026-04-23 00:38 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Paper-trade observation #4`
+- Goal: Re-check the BTCUSDT observation trade after another ~15 minutes and record whether downside pressure is increasing or whether the trade has closed.
+- Inputs:
+  - Endpoint: `/api/dashboard`
+  - Focus position: `BTCUSDT` from `T013`
+- Result:
+  - Position is still open.
+  - `qty=0.126968`
+  - `avg_price=78759.7310`
+  - `current_price=78530.0000`
+  - `stop_loss=78114.5514`
+  - `take_profit=79193.1086`
+  - `unrealized=-29.1686`
+  - `realized=0.0000`
+  - Account still has `0` open orders and `1` trade in log.
+- Live-signal context:
+  - `BTCUSDT` remains at `SETUP`, not `READY`.
+  - `ETHUSDT`, `SOLUSDT`, `BNBUSDT` still do not qualify as clean `READY`.
+- Notes:
+  - Downside drift increased materially compared with `T016`, but the trade still has not hit the configured stop-loss.
+  - No new paper trade was opened.
+
+### T018
+
+- Timestamp: `2026-04-23 00:54 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Paper-trade observation #5`
+- Goal: Re-check the BTCUSDT observation trade after another ~15 minutes and record whether the open loss is expanding, stabilizing, or reversing.
+- Inputs:
+  - Endpoint: `/api/dashboard`
+  - Focus position: `BTCUSDT` from `T013`
+- Result:
+  - Position is still open.
+  - `qty=0.126968`
+  - `avg_price=78759.7310`
+  - `current_price=78553.8600`
+  - `stop_loss=78114.5514`
+  - `take_profit=79193.1086`
+  - `unrealized=-26.1391`
+  - `realized=0.0000`
+  - Account still has `0` open orders and `1` trade in log.
+- Live-signal context:
+  - `BTCUSDT` remains at `SETUP`, not `READY`.
+  - `ETHUSDT`, `SOLUSDT`, `BNBUSDT` still do not qualify as clean `READY`.
+- Notes:
+  - Loss remains meaningful but has eased slightly versus `T017`; the position is still between stop and take-profit.
+  - No new paper trade was opened.
+
+### T019
+
+- Timestamp: `2026-04-23 01:10 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Paper-trade observation #6`
+- Goal: Re-check the BTCUSDT observation trade after another ~15 minutes and record whether the open loss is stabilizing or worsening.
+- Inputs:
+  - Endpoint: `/api/dashboard`
+  - Focus position: `BTCUSDT` from `T013`
+- Result:
+  - Position is still open.
+  - `qty=0.126968`
+  - `avg_price=78759.7310`
+  - `current_price=78573.4400`
+  - `stop_loss=78114.5514`
+  - `take_profit=79193.1086`
+  - `unrealized=-23.6531`
+  - `realized=0.0000`
+  - Account still has `0` open orders and `1` trade in log.
+- Live-signal context:
+  - `BTCUSDT` remains at `SETUP`, not `READY`.
+  - `ETHUSDT`, `SOLUSDT`, `BNBUSDT` still do not qualify as clean `READY`.
+- Notes:
+  - The open loss narrowed slightly again compared with `T018`, but the setup still lacks renewed trigger confirmation.
+  - No new paper trade was opened.
+
+### T020
+
+- Timestamp: `2026-04-23 01:26 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Paper-trade observation #7`
+- Goal: Re-check the BTCUSDT observation trade after another ~15 minutes and record whether the position is approaching failure or recovering.
+- Inputs:
+  - Endpoint: `/api/dashboard`
+  - Focus position: `BTCUSDT` from `T013`
+- Result:
+  - Position is still open.
+  - `qty=0.126968`
+  - `avg_price=78759.7310`
+  - `current_price=78263.1100`
+  - `stop_loss=78114.5514`
+  - `take_profit=79193.1086`
+  - `unrealized=-63.0552`
+  - `realized=0.0000`
+  - Account still has `0` open orders and `1` trade in log.
+- Live-signal context:
+  - `BTCUSDT` degraded from `SETUP` to `WAIT`.
+  - `ETHUSDT`, `SOLUSDT`, `BNBUSDT` still do not qualify as clean `READY`.
+- Notes:
+  - This is the weakest state so far: the open loss expanded materially and price is now much closer to stop-loss than take-profit.
+  - No new paper trade was opened.
+
+### T021
+
+- Timestamp: `2026-04-23 01:42 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Paper-trade observation #8`
+- Goal: Re-check the BTCUSDT observation trade after another ~15 minutes and record whether the position is nearing stop-loss or stabilizing.
+- Inputs:
+  - Endpoint: `/api/dashboard`
+  - Focus position: `BTCUSDT` from `T013`
+- Result:
+  - Position is still open.
+  - `qty=0.126968`
+  - `avg_price=78759.7310`
+  - `current_price=78228.1600`
+  - `stop_loss=78114.5514`
+  - `take_profit=79193.1086`
+  - `unrealized=-67.4927`
+  - `realized=0.0000`
+  - Account still has `0` open orders and `1` trade in log.
+- Live-signal context:
+  - `BTCUSDT` remains at `WAIT`.
+  - `ETHUSDT`, `SOLUSDT`, `BNBUSDT` also remain outside clean `READY`.
+- Notes:
+  - This is slightly worse than `T020`; the position remains open but is now very close to stop-loss relative to the original risk budget.
+  - No new paper trade was opened.
+
+### T022
+
+- Timestamp: `2026-04-23 01:58 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Paper-trade observation #9`
+- Goal: Re-check the BTCUSDT observation trade after another ~15 minutes and record whether stop-loss is close to being hit.
+- Inputs:
+  - Endpoint: `/api/dashboard`
+  - Focus position: `BTCUSDT` from `T013`
+- Result:
+  - Position is still open.
+  - `qty=0.126968`
+  - `avg_price=78759.7310`
+  - `current_price=78189.4400`
+  - `stop_loss=78114.5514`
+  - `take_profit=79193.1086`
+  - `unrealized=-72.4090`
+  - `realized=0.0000`
+  - Account still has `0` open orders and `1` trade in log.
+- Live-signal context:
+  - `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT` are all currently at `WAIT`.
+- Notes:
+  - This is the weakest state so far; BTCUSDT is now very close to the configured stop-loss.
+  - No new paper trade was opened.
+
+### T023
+
+- Timestamp: `2026-04-23 02:14 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Paper-trade observation #10 / stop-loss resolution`
+- Goal: Check whether the BTCUSDT observation trade remained open or resolved, then decide whether a new observation trade should be opened.
+- Inputs:
+  - Endpoint: `/api/dashboard`
+  - Focus position: `BTCUSDT` from `T013`
+- Result:
+  - The BTCUSDT observation trade is no longer open.
+  - Latest closing trade:
+    - `symbol=BTCUSDT`
+    - `side=SELL`
+    - `source=AUTO_STOP_LOSS`
+    - `price=77874.9600`
+    - `realized_pnl=-122.2257`
+    - `note=AUTO_STOP_LOSS: T013 heartbeat observation | BTCUSDT READY scan 2026-04-22 23:34 Europe/Ljubljana`
+  - Account state after close:
+    - `positions=0`
+    - `orders=0`
+    - `trades=2`
+    - `cash=9877.7743`
+    - `realized_pnl=-122.2257`
+- Live-signal context:
+  - `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT` are all currently at `WAIT`.
+- Notes:
+  - The first observation trade finished via automatic stop-loss.
+  - No new paper trade was opened because no symbol currently has a clean `READY` setup.
+
+### T024
+
+- Timestamp: `2026-04-23 02:30 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Post-stop-loss live-signal scan`
+- Goal: Check whether a new clean `READY` opportunity appeared after the first observation trade was stopped out.
+- Inputs:
+  - Endpoint: `/api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `2 trades`, `cash=9877.7743`, `realized_pnl=-122.2257`
+- Result:
+  - `BTCUSDT`: `stage=setup`, `bias=bullish`, `confidence=85`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+- Notes:
+  - The account remains flat after the stop-loss event.
+  - No new paper trade was opened because no symbol currently has a clean `READY` setup.
+
+### T025
+
+- Timestamp: `2026-04-23 02:46 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Post-stop-loss live-signal scan #2`
+- Goal: Check whether any symbol has recovered into a clean `READY` setup after the stop-loss event.
+- Inputs:
+  - Endpoint: `/api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `2 trades`, `cash=9877.7743`, `realized_pnl=-122.2257`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+- Notes:
+  - This is weaker than `T024`: all four symbols are currently at `WAIT`.
+  - No new paper trade was opened because no symbol currently has a clean `READY` setup.
+
+### T026
+
+- Timestamp: `2026-04-23 03:02 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Post-stop-loss live-signal scan #3`
+- Goal: Check whether any symbol has recovered into a clean `READY` setup after the stop-loss event.
+- Inputs:
+  - Endpoint: `/api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `2 trades`, `cash=9877.7743`, `realized_pnl=-122.2257`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+- Notes:
+  - The account remains flat and there is still no clean `READY` setup.
+  - No new paper trade was opened.
+
+### T027
+
+- Timestamp: `2026-04-23 03:18 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Post-stop-loss live-signal scan #4`
+- Goal: Check whether any symbol has recovered into a clean `READY` setup after the stop-loss event.
+- Inputs:
+  - Endpoint: `/api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `2 trades`, `cash=9877.7743`, `realized_pnl=-122.2257`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+- Notes:
+  - The account remains flat and there is still no clean `READY` setup.
+  - No new paper trade was opened.
+
+### T028
+
+- Timestamp: `2026-04-23 03:34 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Post-stop-loss live-signal scan #5`
+- Goal: Check whether any symbol has recovered into a clean `READY` setup after the stop-loss event.
+- Inputs:
+  - Endpoint: `/api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `2 trades`, `cash=9877.7743`, `realized_pnl=-122.2257`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+- Notes:
+  - The account remains flat and there is still no clean `READY` setup.
+  - No new paper trade was opened.
+
+### T029
+
+- Timestamp: `2026-04-23 03:50 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Post-stop-loss live-signal scan #6`
+- Goal: Check whether any symbol has recovered into a clean `READY` setup after the stop-loss event.
+- Inputs:
+  - Endpoint: `/api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `2 trades`, `cash=9877.7743`, `realized_pnl=-122.2257`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+- Notes:
+  - The account remains flat and there is still no clean `READY` setup.
+  - No new paper trade was opened.
+
+### T030
+
+- Timestamp: `2026-04-23 04:06 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Post-stop-loss live-signal scan #7`
+- Goal: Check whether any symbol has recovered into a clean `READY` setup after the stop-loss event.
+- Inputs:
+  - Endpoint: `/api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `2 trades`, `cash=9877.7743`, `realized_pnl=-122.2257`
+- Result:
+  - `BTCUSDT`: `stage=setup`, `bias=bullish`, `confidence=85`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+- Notes:
+  - The account remains flat.
+  - `BTCUSDT` recovered to `SETUP`, but there is still no clean `READY` setup.
+  - No new paper trade was opened.
+
+### T031
+
+- Timestamp: `2026-04-23 04:22 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Post-stop-loss live-signal scan #8`
+- Goal: Check whether any symbol has recovered into a clean `READY` setup after the stop-loss event.
+- Inputs:
+  - Endpoint: `/api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `2 trades`, `cash=9877.7743`, `realized_pnl=-122.2257`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+- Notes:
+  - The account remains flat.
+  - This scan is weaker than `T030` because `BTCUSDT` fell back from `SETUP` to `WAIT`.
+  - No new paper trade was opened.
+
+### T032
+
+- Timestamp: `2026-04-23 04:38 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Post-stop-loss live-signal scan #9`
+- Goal: Check whether any symbol has recovered into a clean `READY` setup after the stop-loss event.
+- Inputs:
+  - Endpoint: `/api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `2 trades`, `cash=9877.7743`, `realized_pnl=-122.2257`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+- Notes:
+  - The account remains flat and there is still no clean `READY` setup.
+  - Despite stronger last-trigger body ratios on some symbols, no setup cleared the full trigger gate.
+  - No new paper trade was opened.
+
+### T033
+
+- Timestamp: `2026-04-23 04:54 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Post-stop-loss live-signal scan #10`
+- Goal: Check whether any symbol has recovered into a clean `READY` setup after the stop-loss event.
+- Inputs:
+  - Endpoint: `/api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `2 trades`, `cash=9877.7743`, `realized_pnl=-122.2257`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+- Notes:
+  - The account remains flat and there is still no clean `READY` setup.
+  - No new paper trade was opened.
+
+### T034
+
+- Timestamp: `2026-04-23 05:10 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Post-stop-loss live-signal scan #11`
+- Goal: Check whether any symbol has recovered into a clean `READY` setup after the stop-loss event.
+- Inputs:
+  - Endpoint: `/api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `2 trades`, `cash=9877.7743`, `realized_pnl=-122.2257`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+- Notes:
+  - The account remains flat and there is still no clean `READY` setup.
+  - This was the eleventh post-stop-loss scan with no actionable re-entry.
+  - No new paper trade was opened.
+
+### T035
+
+- Timestamp: `2026-04-23 05:26 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Post-stop-loss live-signal scan #12`
+- Goal: Final check before ending low-value repeated monitoring.
+- Inputs:
+  - Endpoint: `/api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `2 trades`, `cash=9877.7743`, `realized_pnl=-122.2257`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`
+- Notes:
+  - The account remains flat and there is still no clean `READY` setup.
+  - Repeated scans after the stop-loss are no longer producing new information.
+  - Monitoring should be stopped until the strategy or filters materially change.
+
+### T036
+
+- Timestamp: `2026-04-23 16:08 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Signal filter implementation + live verification`
+- Goal: Add `session`, `BTC correlation`, and `public news blackout` gates without requiring signup-based data sources.
+- Inputs:
+  - Public sources:
+    - `https://apps.bea.gov/API/signup/release_dates.json`
+    - `https://www.federalreserve.gov/feeds/press_monetary.xml`
+    - `https://www.sec.gov/news/pressreleases.rss`
+    - `https://www.coindesk.com/arc/outboundfeeds/rss`
+  - Commands:
+    - `cargo fmt`
+    - `cargo check`
+    - `docker compose up --build -d`
+    - `GET /health`
+    - `GET /api/dashboard?symbol=BTCUSDT`
+    - `GET /api/dashboard?symbol=ETHUSDT`
+    - `GET /api/dashboard?symbol=BNBUSDT`
+    - `GET /api/replay?symbol=ETHUSDT`
+- Result:
+  - Added live `session` gate for new entries in `07:00-22:00 UTC`.
+  - Added live/replay `BTC correlation` gate using rolling `15m` return correlation.
+  - Added live-only `news blackout` gate with cached public-source checks from `BEA`, `Fed`, `SEC`, and `CoinDesk`.
+  - Docker rebuild and runtime health check succeeded.
+  - `ETHUSDT` dashboard verification showed:
+    - `session filter = pass`
+    - `correlation filter = pass`
+    - `news filter = pass`
+    - `stage = wait` because the technical setup itself was weak
+  - `BTCUSDT` dashboard verification showed:
+    - `correlation filter = pass` via BTC reference bypass
+    - `news filter = fail` on a fresh CoinDesk headline mentioning Bitcoin
+    - `risk_plan = null` in output because blocked/non-ready setups do not expose prefill execution
+  - `ETHUSDT` replay verification returned the new replay notes for session/correlation and explicitly marked `news blackout` as live-only.
+- Notes:
+  - The first CoinDesk heuristic was too noisy and incorrectly blocked `ETHUSDT` on an XRP-focused ETF headline; it was tightened before the final verification pass.
+  - `evaluate_signal` stayed structurally pure; all new filters were added as post-eval gates in live signal assembly, with replay only adopting the deterministic session/correlation parts.
+
+### T037
+
+- Timestamp: `2026-04-23 16:22 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Historical sweep (filtered study, 1200 x 15m candles)`
+- Goal: Re-run the local strategy study after adding deterministic `session` and `BTC correlation` replay gates.
+- Inputs:
+  - Command: `python scripts/strategy_study.py --symbols BTCUSDT ETHUSDT SOLUSDT BNBUSDT --trigger-limit 1200 --forward-candles 32 --json-out tmp/strategy_study_1200_filters.json`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+- Result:
+  - Best config on this shorter sample was still negative after fees:
+    - `strong_trigger`: `11?` no, correction below
+    - `strong_trigger` summary on `1200` candles: `5 trades`, `net_total_r=-2.294`, `net_avg_r=-0.459`
+  - `baseline` stayed materially negative despite more trades:
+    - `30 trades`, `net_total_r=-8.640`, `net_avg_r=-0.288`
+  - Filter cuts on the short sample were small but real:
+    - `baseline`: `session_filtered_ready=9`, `correlation_filtered_ready=2`
+  - Symbol-level standouts:
+    - `SOLUSDT baseline`: `2 trades`, `net_R=2.108`
+    - `BTCUSDT baseline`: `13 trades`, `net_R=-6.322`
+    - `BNBUSDT baseline`: `13 trades`, `net_R=-3.141`
+- Notes:
+  - This short-window rerun does not show a positive edge yet.
+  - The new deterministic gates reduce some technically-ready trades, but not enough to flip the basket positive on this sample.
+
+### T038
+
+- Timestamp: `2026-04-23 16:22 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Historical sweep (filtered study, 4000 x 15m candles)`
+- Goal: Test the filtered strategy on a materially larger sample than the quick 1200-candle pass.
+- Inputs:
+  - Command: `python scripts/strategy_study.py --symbols BTCUSDT ETHUSDT SOLUSDT BNBUSDT --trigger-limit 4000 --forward-candles 32 --json-out tmp/strategy_study_4000_filters.json`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+- Result:
+  - Best configuration on the larger sample was still negative:
+    - `strong_trigger`: `11 trades`, `net_total_r=-5.931`, `net_avg_r=-0.539`
+  - Other configurations were worse:
+    - `baseline`: `65 trades`, `net_total_r=-24.936`, `net_avg_r=-0.384`
+    - `tight_pullback`: `15 trades`, `net_total_r=-11.191`, `net_avg_r=-0.746`
+    - `balanced`: `14 trades`, `net_total_r=-9.556`, `net_avg_r=-0.683`
+    - `balanced_serial`: `11 trades`, `net_total_r=-7.416`, `net_avg_r=-0.674`
+  - Filter effect on the larger sample:
+    - `baseline`: `session_filtered_ready=40`, `correlation_filtered_ready=15`
+    - `strong_trigger`: `session_filtered_ready=11`, `correlation_filtered_ready=1`
+  - Symbol-level detail:
+    - `BTCUSDT` remained the weakest major contributor across configs
+    - `ETHUSDT` and `BNBUSDT` stayed net negative
+    - `SOLUSDT baseline` was the only clear positive pocket (`net_R=1.288`)
+- Notes:
+  - Larger-sample history still argues that the current long-only translation is not robust enough.
+  - Session/correlation filters improve selectivity, but they do not create a positive basket on their own.
+
+### T039
+
+- Timestamp: `2026-04-23 16:22 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign reset + starting scan`
+- Goal: Start a clean realtime paper-trade campaign without mixing in the earlier observation-loss account state.
+- Inputs:
+  - Command: `POST /api/paper/reset`
+  - Live scans:
+    - `GET /api/dashboard?symbol=BTCUSDT&interval=15m`
+    - `GET /api/dashboard?symbol=ETHUSDT&interval=15m`
+    - `GET /api/dashboard?symbol=SOLUSDT&interval=15m`
+    - `GET /api/dashboard?symbol=BNBUSDT&interval=15m`
+    - `GET /api/replay?symbol=BTCUSDT`
+    - `GET /api/replay?symbol=ETHUSDT`
+    - `GET /api/replay?symbol=SOLUSDT`
+    - `GET /api/replay?symbol=BNBUSDT`
+- Result:
+  - Paper account was reset to a clean state for the new campaign.
+  - Starting live scan:
+    - `BTCUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news=false`
+    - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news=true`
+    - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `news=true`
+    - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news=true`
+  - Starting replay snapshot:
+    - `BTCUSDT`: `ready=9`, `setup=57`, `avg_r=-0.280`, `total_r=-2.522`
+    - `ETHUSDT`: `ready=0`, `setup=0`, `avg_r=0.000`, `total_r=0.000`
+    - `SOLUSDT`: `ready=2`, `setup=25`, `avg_r=1.210`, `total_r=2.421`
+    - `BNBUSDT`: `ready=9`, `setup=112`, `avg_r=0.034`, `total_r=0.305`
+- Notes:
+  - No live `READY` setup was available at campaign start, so no paper trade was forced.
+  - `SOLUSDT` remains the only clearly positive symbol in the current built-in replay snapshot and deserves extra attention in the next tuning cycle.
+
+### T040
+
+- Timestamp: `2026-04-23 16:34 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Historical sweep (filtered study, 8000 x 15m candles)`
+- Goal: Stress the current filtered long-only system on a much larger historical sample before leaning on more realtime paper trades.
+- Inputs:
+  - Command: `python scripts/strategy_study.py --symbols BTCUSDT ETHUSDT SOLUSDT BNBUSDT --trigger-limit 8000 --forward-candles 32 --json-out tmp/strategy_study_8000_filters.json`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+- Result:
+  - No tested configuration was positive on the full basket after fees.
+  - Best aggregate configuration:
+    - `strong_trigger`: `15 trades`, `net_total_r=-8.124`, `net_avg_r=-0.542`
+  - Worse aggregate configurations:
+    - `baseline`: `102 trades`, `net_total_r=-39.546`, `net_avg_r=-0.388`
+    - `tight_pullback`: `23 trades`, `net_total_r=-16.085`, `net_avg_r=-0.699`
+    - `balanced`: `20 trades`, `net_total_r=-11.964`, `net_avg_r=-0.598`
+    - `balanced_serial`: `15 trades`, `net_total_r=-9.929`, `net_avg_r=-0.662`
+  - Filter effect on the largest sample:
+    - `baseline`: `session_filtered_ready=57`, `correlation_filtered_ready=25`
+    - `strong_trigger`: `session_filtered_ready=14`, `correlation_filtered_ready=6`
+  - Symbol-level observations:
+    - `BTCUSDT` stayed heavily negative across every config
+    - `ETHUSDT` also stayed negative across every config
+    - `SOLUSDT` turned negative on the larger sample despite looking promising on shorter windows
+    - `BNBUSDT strong_trigger` was the only small positive pocket (`4 trades`, `net_R=0.184`), but far too small to trust on its own
+- Notes:
+  - The larger sample confirms that current improvements are still more of a noise filter than a true edge generator.
+  - The strategy likely needs stronger context rules or materially different trade management, not just more replay runs.
+
+### T041
+
+- Timestamp: `2026-04-23 16:34 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime monitor automation`
+- Goal: Keep the new realtime paper-trade campaign running without manually polling every few minutes.
+- Inputs:
+  - Automation: `realtime-paper-test`
+  - Cadence: `every 15 minutes`
+  - Task: scan `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`, log every scan, open at most one observation paper trade when a clean `READY` signal appears
+- Result:
+  - Heartbeat automation was created and attached to this thread.
+  - Future wakeups will continue the realtime campaign in the same log file.
+- Notes:
+  - The automation is constrained to at most one open observation trade at a time.
+  - No trade was forced during setup; entry still requires a live `READY` signal.
+
+### T042
+
+- Timestamp: `2026-04-23 16:49 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #1`
+- Goal: Check for the first clean live `READY` setup after starting the reset realtime paper-test campaign.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=false`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=false`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `news_filter=false`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=false`
+- Notes:
+  - All four symbols remained outside a clean `READY` state, so no paper trade was opened.
+  - The paper account remains clean and flat for the new campaign.
+  - A fresh CoinDesk headline (`JPMorgan says persistent security flaws curb DeFi's institutional appeal`) triggered the live news blackout across the basket during this scan.
+  - No new paper-trade or replay event needed separate action on this wakeup.
+
+### T043
+
+- Timestamp: `2026-04-23 17:05 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #2`
+- Goal: Re-check the basket for the first clean live `READY` setup and keep the reset campaign account flat unless a valid signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=false`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=false`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `news_filter=false`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=false`
+- Notes:
+  - The paper account remains flat and fully reset.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - The same live `news blackout` regime is still suppressing the basket, with the DeFi-security CoinDesk headline now about 27 minutes old.
+  - `ETHUSDT` and `BNBUSDT` showed stronger recent 15m candle bodies than on the previous scan, but that still did not produce a valid entry.
+
+### T044
+
+- Timestamp: `2026-04-23 17:22 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #3`
+- Goal: Check whether the first post-blackout momentum burst produced any clean live `READY` setup worth opening as an observation trade.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=false`, `15m trigger=strong`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=false`, `15m trigger=strong`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `news_filter=false`, `15m trigger=strong`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=false`, `15m trigger=strong`
+- Notes:
+  - The paper account remains fully flat.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This scan was notable because all four symbols showed strong `15m` momentum candles at the same time, which is consistent with a broad market burst rather than a selective setup.
+  - The same CoinDesk DeFi-security blackout headline remained active after roughly 43 minutes and continued to block the full basket.
+
+### T045
+
+- Timestamp: `2026-04-23 17:37 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #4`
+- Goal: Check whether the earlier broad momentum burst resolved into any clean live `READY` setup once the next 15m candle closed.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=false`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=false`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `news_filter=false`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=false`
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - Compared with the previous scan, the broad 15m momentum burst faded; all four trigger readings fell back below valid momentum-close conditions.
+  - The same CoinDesk DeFi-security blackout headline remained active after roughly 59 minutes and still blocked the basket.
+
+### T046
+
+- Timestamp: `2026-04-23 17:53 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #5`
+- Goal: Check whether the basket recovered into any clean live `READY` setup once the blackout aged further.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=false`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=false`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `news_filter=false`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=false`
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - The same CoinDesk DeFi-security blackout headline remained active after roughly 75 minutes and still blocked the basket.
+  - This scan was weaker than the previous one: several 15m candles had large bodies but closed near their lows, so momentum-close conditions were not satisfied despite strong range expansion.
+
+### T047
+
+- Timestamp: `2026-04-23 18:10 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #6`
+- Goal: Check whether the basket becomes tradable again after the news-blackout window expires.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This was the first scan after the CoinDesk blackout cleared; all four symbols passed the `news filter` again.
+  - Despite the cleaner context, none of the four symbols printed a valid `15m` momentum close, so the basket stayed non-actionable.
+
+### T048
+
+- Timestamp: `2026-04-23 18:25 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #7`
+- Goal: Check whether the basket produces the first clean `READY` setup now that the news blackout is gone.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`, `15m_trigger=true`
+  - `SOLUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - `ETHUSDT` printed a valid `15m` momentum close on this scan, but that still was not enough to advance the signal beyond `WAIT`, which points to missing higher-timeframe setup quality rather than a trigger problem.
+  - The basket stayed tradeless even with the news filter clear, which reinforces that the current bottleneck is now structural setup quality, not event blackout gating.
+
+### T049
+
+- Timestamp: `2026-04-23 18:41 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #8`
+- Goal: Check whether the brief `ETHUSDT` trigger improvement from the previous scan develops into any actionable `READY` setup.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - Compared with the previous scan, `ETHUSDT` lost its valid `15m` trigger and the whole basket weakened again.
+  - The current blocker remains setup quality on higher timeframes rather than any event or session filter.
+
+### T050
+
+- Timestamp: `2026-04-23 18:58 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #9`
+- Goal: Check whether the basket recovers into a usable live setup after the previous all-clear news regime remained in place.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This scan remained non-actionable even with the news filter clear, because all four symbols failed the `15m` momentum-close condition again.
+  - The current blocker is still setup/trigger quality rather than session or event gating.
+
+### T051
+
+- Timestamp: `2026-04-23 19:14 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #10`
+- Goal: Check whether the basket finally recovers into any clean `READY` setup while the news regime remains clear.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - The basket stayed non-actionable even with the `news filter` clear, because all four symbols again failed the `15m` momentum-close requirement.
+  - Current blocker remains setup/trigger quality rather than any active blackout or session restriction.
+
+### T052
+
+- Timestamp: `2026-04-23 19:30 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #11`
+- Goal: Check whether any clean `READY` setup appears while the basket stays in an all-clear news regime.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - The basket remained non-actionable even with the `news filter` clear, because all four symbols again failed either the `15m` momentum-close requirement or the broader structural context.
+  - Current blocker remains setup/trigger quality rather than any active blackout or session restriction.
+
+### T053
+
+- Timestamp: `2026-04-23 19:46 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #12`
+- Goal: Check whether any clean `READY` setup appears while the news regime stays clear and the account remains flat.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This scan was weaker than the previous one because `ETHUSDT` and `SOLUSDT` both degraded to `neutral` 4h bias.
+  - The current blocker remains structural setup quality and weak `15m` confirmation, not any active blackout or session restriction.
+
+### T054
+
+- Timestamp: `2026-04-23 20:02 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #13`
+- Goal: Check whether any clean `READY` setup appears while the basket stays in an all-clear news regime and the account remains flat.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This scan was marginally better than the previous one because `ETHUSDT` recovered to bullish 4h bias and `BTCUSDT` moved closer to its 1h support zone, but neither symbol produced a valid `15m` momentum close.
+  - The current blocker remains setup/trigger quality rather than any active blackout or session restriction.
+
+### T055
+
+- Timestamp: `2026-04-23 20:18 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #14`
+- Goal: Check whether any clean `READY` setup appears while the basket remains in an all-clear news regime and the account stays flat.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This scan was weaker than the previous one because `BTCUSDT` degraded to an almost zero-body `15m` candle and the whole basket again failed the momentum-close requirement.
+  - The current blocker remains setup/trigger quality rather than any active blackout or session restriction.
+
+### T056
+
+- Timestamp: `2026-04-23 20:34 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #15`
+- Goal: Check whether any clean `READY` setup appears while the basket remains in an all-clear news regime and the account stays flat.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`, `15m_trigger=true`
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - `BNBUSDT` printed a valid `15m` momentum close on this scan, but that still was not enough to advance the signal beyond `WAIT`, which points to missing higher-timeframe setup quality rather than a trigger problem.
+  - The current blocker remains setup/trigger quality rather than any active blackout or session restriction.
+
+### T057
+
+- Timestamp: `2026-04-23 20:50 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #16`
+- Goal: Check whether any clean `READY` setup appears while the basket remains in an all-clear news regime and the account stays flat.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This scan stayed non-actionable even with the `news filter` clear, because all four symbols again failed the `15m` momentum-close requirement.
+  - Several symbols printed larger candle bodies, but they still closed too low within the range to qualify as valid long triggers.
+
+### T058
+
+- Timestamp: `2026-04-23 21:06 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #17`
+- Goal: Check whether any clean `READY` setup appears while the basket remains in an all-clear news regime and the account stays flat.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `news_filter=true`
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This scan remained non-actionable even with the `news filter` clear, because the whole basket again failed either the `15m` momentum-close requirement or the broader structural setup test.
+  - Current blocker remains setup/trigger quality rather than any active blackout or session restriction.
+
+### T059
+
+- Timestamp: `2026-04-23 21:25 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Manual PDF-faithful campaign review`
+- Goal: Re-check the live basket after returning to the PDF, confirm paper-account cleanliness, compare current live setup quality with recent replay expectancy, and decide whether to open a discretionary observation trade.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Endpoint: `GET /api/replay`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before review: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - Live basket:
+    - `BTCUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+    - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `1h_setup=false`, `15m_trigger=true`, `news_filter=true`
+    - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+    - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `1h_setup=false`, `15m_trigger=true`, `news_filter=true`
+  - Recent replay context:
+    - `BTCUSDT`: `ready_signals=9`, `avg_r=-0.2802`, `total_r=-2.5218`
+    - `ETHUSDT`: `ready_signals=0`, `avg_r=0.0000`, `total_r=0.0000`
+    - `SOLUSDT`: `ready_signals=2`, `avg_r=1.2103`, `total_r=2.4206`
+    - `BNBUSDT`: `ready_signals=9`, `avg_r=0.0338`, `total_r=0.3045`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - This review was intentionally stricter after re-reading the PDF: trend, context, timing, and filter alignment all matter, not just a strong `15m` candle.
+  - `ETHUSDT` and `BNBUSDT` were the closest live candidates because they had valid `15m` momentum closes, but both still failed the `1h setup` requirement by trading below their support zones.
+  - `SOLUSDT` remains the strongest recent replay symbol on the short in-app window, but the live `4h bias` is still neutral, so it did not justify a discretionary long.
+  - Current evidence still supports staying flat until a genuinely clean `READY` setup appears.
+
+### T060
+
+- Timestamp: `2026-04-23 21:41 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #18`
+- Goal: Inspect the live basket after the PDF-faithful manual review, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This scan was weaker than `T059`: `ETHUSDT` and `BNBUSDT` both lost the valid `15m` trigger they had earlier, and the basket now fails both the `1h setup` and `15m trigger` layers almost across the board.
+  - Current blocker remains setup/trigger quality rather than any active blackout, session restriction, or account-state issue.
+
+### T061
+
+- Timestamp: `2026-04-23 21:57 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #19`
+- Goal: Inspect the live basket, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `1h_setup=false`, `15m_trigger=true`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `1h_setup=false`, `15m_trigger=true`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This scan improved slightly on raw trigger quality: `ETHUSDT` printed a strong `15m` momentum close, and `SOLUSDT` did the same, but both still failed the broader setup context.
+  - `ETHUSDT` remains the nearest long candidate at the moment, yet it is still trading below the `1h` support zone, which keeps the setup invalid under the current rules.
+
+### T062
+
+- Timestamp: `2026-04-23 22:13 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #20`
+- Goal: Inspect the live basket, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=bearish`, `confidence=25`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This scan was materially weaker than `T061`: `BTCUSDT` lost bullish `4h` bias, `ETHUSDT` fell back to neutral and also failed the correlation gate, while `SOLUSDT` degraded further into bearish bias.
+  - `BNBUSDT` is now the only symbol left with bullish `4h` context, but it still trades below the `1h` support zone and does not have a valid trigger, so there is still no acceptable long setup.
+
+### T063
+
+- Timestamp: `2026-04-23 22:29 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #21`
+- Goal: Inspect the live basket, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=bearish`, `confidence=25`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This scan stayed broadly similar to `T062` but with even weaker intraday trigger quality: `ETHUSDT` lost the stronger momentum close from the previous wakeup, while `SOLUSDT` degraded to an almost flat `15m` body.
+  - `BNBUSDT` remains the only symbol with bullish `4h` context, but it is still materially below the `1h` support zone and does not have a valid trigger, so there is still no acceptable long setup.
+
+### T064
+
+- Timestamp: `2026-04-23 22:45 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #22`
+- Goal: Inspect the live basket, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=bearish`, `confidence=25`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This scan improved slightly versus `T063` because `ETHUSDT` recovered bullish `4h` bias and `BNBUSDT` moved much closer to its `1h` support zone, but the basket still lacks a valid trigger/setup combination.
+  - `BNBUSDT` is currently the closest live long candidate because it sits only `0.02` below the `1h` support zone, yet it still does not print a valid `15m` momentum close, so the setup remains invalid under the current rules.
+
+### T065
+
+- Timestamp: `2026-04-23 23:01 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #23`
+- Goal: Inspect the live basket, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=false`
+  - `SOLUSDT`: `stage=wait`, `bias=bearish`, `confidence=25`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This scan weakened versus `T064` because the basket is now blocked by an active `news blackout` on top of the already weak technical picture.
+  - `BNBUSDT` remains the closest technical long candidate, but it is still below the `1h` support zone, lacks a valid `15m` trigger, and is additionally blocked by the live news filter.
+
+### T066
+
+- Timestamp: `2026-04-23 23:18 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #24`
+- Goal: Inspect the live basket, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=false`
+  - `SOLUSDT`: `stage=wait`, `bias=bearish`, `confidence=25`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This scan stayed broadly similar to `T065`: the active `news blackout` still blocks the basket, and the technical picture remains too weak for any discretionary override.
+  - `BNBUSDT` remains the closest technical long candidate, but it is still below the `1h` support zone and its `15m` candle still closes weakly enough to fail the trigger.
+
+### T067
+
+- Timestamp: `2026-04-23 23:34 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #25`
+- Goal: Inspect the live basket, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `1h_setup=false`, `15m_trigger=true`, `news_filter=false`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `1h_setup=false`, `15m_trigger=true`, `correlation_filter=false`, `news_filter=false`
+  - `SOLUSDT`: `stage=wait`, `bias=bearish`, `confidence=25`, `1h_setup=false`, `15m_trigger=true`, `news_filter=false`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `1h_setup=false`, `15m_trigger=true`, `news_filter=false`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This scan improved sharply on raw trigger quality: all four symbols printed valid `15m` momentum closes, but none cleared the full setup stack.
+  - `BNBUSDT` became the clearest near-miss because it kept bullish `4h` context, printed a perfect `15m` trigger, and sat only `0.15` below the `1h` support zone, but it still failed the formal setup gate and remained blocked by the active news blackout.
+
+### T068
+
+- Timestamp: `2026-04-23 23:50 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #26`
+- Goal: Inspect the live basket, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=false`
+  - `SOLUSDT`: `stage=wait`, `bias=bearish`, `confidence=25`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `BNBUSDT`: `stage=setup`, `bias=bullish`, `confidence=85`, `1h_setup=true`, `15m_trigger=false`, `news_filter=false`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This scan improved versus `T067` because `BNBUSDT` reclaimed the `1h` support zone and advanced from `WAIT` to `SETUP`, making it the clearest live candidate so far in the current blackout window.
+  - The setup still remains invalid for entry because `BNBUSDT` has not confirmed the `15m` trigger, and the active `news blackout` is still on, so there is no reason to force a paper trade yet.
+
+### T069
+
+- Timestamp: `2026-04-24 00:06 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #27`
+- Goal: Inspect the live basket, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=false`
+  - `SOLUSDT`: `stage=wait`, `bias=bearish`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=false`
+  - `BNBUSDT`: `stage=setup`, `bias=bullish`, `confidence=85`, `session_filter=false`, `1h_setup=true`, `15m_trigger=false`, `news_filter=false`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - `BNBUSDT` still holds the best live structure and remains at `SETUP`, but it is still missing a confirmed `15m` trigger.
+  - This wakeup is additionally blocked by time-of-day: the session gate has now closed for all four symbols, so new long entries are formally disallowed even before considering the still-active news blackout.
+
+### T070
+
+- Timestamp: `2026-04-24 00:22 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #28`
+- Goal: Inspect the live basket, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=bearish`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=setup`, `bias=bullish`, `confidence=85`, `session_filter=false`, `1h_setup=true`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup improved versus `T069` because the news blackout cleared across the basket, and `BNBUSDT` now holds its `1h` support zone more cleanly while staying at `SETUP`.
+  - Even with the news filter clear, the setup is still not actionable because `BNBUSDT` has not confirmed a valid `15m` trigger and the session gate remains closed for all four symbols.
+
+### T071
+
+- Timestamp: `2026-04-24 00:39 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #29`
+- Goal: Inspect the live basket, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=setup`, `bias=bullish`, `confidence=85`, `session_filter=false`, `1h_setup=true`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup remains formally non-tradable because the session gate is still closed for the whole basket.
+  - `BNBUSDT` is still the best-looking candidate and has improved slightly by holding farther above the `1h` support zone, but it still has not confirmed a valid `15m` trigger, so there is still no reason to force a paper trade.
+
+### T072
+
+- Timestamp: `2026-04-24 00:55 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #30`
+- Goal: Inspect the live basket, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=setup`, `bias=bullish`, `confidence=85`, `session_filter=false`, `1h_setup=true`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed broadly unchanged versus `T071`: the news filter is clear again, but the session gate remains closed across the basket.
+  - `BNBUSDT` remains the clearest live candidate by holding its `1h` setup, yet it still lacks a confirmed `15m` trigger, so there is still no valid reason to open a paper trade.
+
+### T073
+
+- Timestamp: `2026-04-24 01:12 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #31`
+- Goal: Inspect the live basket, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=bearish`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup weakened versus `T072` because `BNBUSDT` lost its `SETUP` status and slipped back below the `1h` support zone, leaving the basket without any strong live candidate.
+  - The basket remains formally non-tradable overnight because the session gate is still closed across all four symbols.
+
+### T074
+
+- Timestamp: `2026-04-24 01:28 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #32`
+- Goal: Inspect the live basket, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=bearish`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed weak overnight: `BNBUSDT` remains the least-bad candidate on higher timeframe bias, but it is still back below the `1h` support zone and the `15m` trigger quality has softened further.
+  - The basket remains formally non-tradable because the session gate is still closed across all four symbols.
+
+### T075
+
+- Timestamp: `2026-04-24 01:44 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #33`
+- Goal: Inspect the live basket, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=setup`, `bias=bullish`, `confidence=85`, `session_filter=false`, `1h_setup=true`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - `BNBUSDT` improved slightly versus `T074` by regaining `SETUP` status and sitting just back above the `1h` support zone, so it remains the clearest overnight candidate.
+  - Even so, the basket is still formally non-tradable because the session gate remains closed, and the live `15m` trigger quality is effectively absent right now, with multiple symbols printing zero-body or near-zero-body candles.
+
+### T076
+
+- Timestamp: `2026-04-24 02:00 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #34`
+- Goal: Inspect the live basket, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=true`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup weakened versus `T075` because `BNBUSDT` lost its bullish `4h` bias and dropped out of `SETUP`, so the basket no longer has even a partial lead candidate.
+  - `BNBUSDT` still printed a strong `15m` momentum close, but with the `4h` bias now neutral, the `1h` setup broken, and the session gate still closed, there is still no valid reason to open a paper trade.
+
+### T077
+
+- Timestamp: `2026-04-24 02:16 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #35`
+- Goal: Inspect the live basket, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup weakened further versus `T076`: all four symbols now sit in the same `WAIT/neutral-or-worse` state, so the basket has no lead candidate at all.
+  - `BNBUSDT` degraded again by moving farther below its `1h` support zone while also printing an effectively dead `15m` candle, so there is no reason to override the still-closed session gate.
+
+### T078
+
+- Timestamp: `2026-04-24 02:32 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #36`
+- Goal: Inspect the live basket, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed broadly unchanged versus `T077`: the entire basket remains trapped in the same `WAIT/neutral` overnight regime without any lead candidate.
+  - `BNBUSDT` recovered slightly versus the prior scan by moving back above its 1h support reference, but the higher-timeframe bias is still neutral, the 15m trigger is still invalid, and the closed session gate still makes the basket formally non-tradable.
+
+### T079
+
+- Timestamp: `2026-04-24 02:49 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #37`
+- Goal: Inspect the live basket, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=setup`, `bias=bullish`, `confidence=85`, `session_filter=false`, `1h_setup=true`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - `BNBUSDT` improved again versus `T078` by regaining `SETUP` status and holding well above the `1h` support reference, so it remains the clearest overnight candidate.
+  - Even so, the basket is still formally non-tradable because the session gate remains closed and `BNBUSDT` still lacks a confirmed `15m` trigger.
+  - Because the overnight 15-minute cadence was no longer adding meaningful new information while session-gated, the heartbeat automation was reduced from every 15 minutes to every 1 hour.
+
+### T080
+
+- Timestamp: `2026-04-24 03:50 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #38`
+- Goal: Inspect the live basket, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=true`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=true`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=true`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=true`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup improved materially on raw trigger quality because all four symbols printed valid `15m` momentum closes, but none advanced beyond `WAIT`.
+  - The reason is structural rather than tactical: the `4h` bias remains neutral across the basket, the `1h` setup is still invalid on all four symbols, and the session gate is still closed, so there is still no valid reason to open a paper trade.
+
+### T081
+
+- Timestamp: `2026-04-24 04:51 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #39`
+- Goal: Inspect the live basket, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup weakened again versus `T080`: the stronger `15m` momentum burst from the previous hourly scan faded completely, returning the whole basket to a uniform `WAIT/neutral` state.
+  - The basket remains formally non-tradable because the session gate is still closed across all four symbols, and there is currently no lead candidate worth overriding that rule.
+
+### T082
+
+- Timestamp: `2026-04-24 05:53 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #40`
+- Goal: Inspect the live basket, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup weakened further versus `T081`: the entire basket remains trapped in `WAIT/neutral`, and `BNBUSDT` has now slipped materially deeper below its `1h` support reference instead of stabilizing.
+  - The basket remains formally non-tradable because the session gate is still closed across all four symbols, and there is still no lead candidate worth overriding that rule.
+
+### T083
+
+- Timestamp: `2026-04-24 06:54 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #41`
+- Goal: Inspect the live basket, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=true`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed broadly similar to `T082`: the basket remains stuck in an overnight `WAIT/neutral` regime with the session gate still closed across all four symbols.
+  - `BNBUSDT` printed the strongest raw `15m` trigger on this scan, but it is still much too weak structurally because the `4h` bias remains neutral and price is still materially below the `1h` support reference.
+
+### T084
+
+- Timestamp: `2026-04-24 07:55 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #42`
+- Goal: Inspect the live basket, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=true`, `news_filter=false`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=true`, `correlation_filter=false`, `news_filter=false`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=true`, `news_filter=false`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=true`, `news_filter=false`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup improved materially on raw trigger quality because all four symbols printed valid `15m` momentum closes, but the basket still stayed at `WAIT` because the `4h` bias remained neutral and the `1h` setup stayed invalid across the board.
+  - The live news filter also flipped back into blackout while the session gate is still closed, so there is still no actionable long setup.
+  - Because the active session window is approaching again and the basket just printed stronger short-term momentum, the heartbeat cadence was increased back from `1h` to `15m` to catch any valid setup soon after the session gate reopens.
+
+### T085
+
+- Timestamp: `2026-04-24 08:12 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #43`
+- Goal: Inspect the live basket, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=false`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup weakened again versus `T084`: the stronger short-term momentum faded and the whole basket returned to a uniform `WAIT/neutral` state.
+  - The basket is still formally non-tradable because the session gate remains closed just before the active window opens, and the live news filter is also still blocking all four symbols.
+
+### T086
+
+- Timestamp: `2026-04-24 08:28 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #44`
+- Goal: Inspect the live basket, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=false`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed broadly unchanged versus `T085`: the entire basket remains trapped in a uniform `WAIT/neutral` regime without any lead candidate.
+  - The basket is still formally non-tradable because the session gate remains closed and the live news filter is also still blocking all four symbols.
+
+### T087
+
+- Timestamp: `2026-04-24 08:44 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #45`
+- Goal: Inspect the live basket, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=false`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed effectively unchanged versus `T086`: the basket remains uniformly stuck in a `WAIT/neutral` regime without any lead candidate.
+  - The basket is still formally non-tradable because the session gate remains closed, and the live news filter is also still blocking all four symbols.
+
+### T088
+
+- Timestamp: `2026-04-24 09:00 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #46`
+- Goal: Inspect the live basket at the start of the allowed session window, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=false`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This is the first scan after the session gate reopened, but it still did not produce a usable entry because the whole basket remained stuck at `WAIT/neutral`.
+  - The live news filter is also still blocking all four symbols, so even the reopening of the session window did not make the basket actionable.
+
+### T089
+
+- Timestamp: `2026-04-24 09:16 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #47`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=false`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed broadly unchanged versus `T088`: even with the session gate open, the basket remains uniformly stuck at `WAIT/neutral` without any lead candidate.
+  - The live news filter is still blocking all four symbols, so the session reopening still has not made the basket actionable.
+
+### T090
+
+- Timestamp: `2026-04-24 09:32 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #48`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=false`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed effectively unchanged versus `T089`: even with the session gate open, the basket remains uniformly stuck at `WAIT/neutral` and structurally weak.
+  - The live news filter is still blocking all four symbols, so there is still no actionable candidate and no reason to override the flat stance.
+
+### T091
+
+- Timestamp: `2026-04-24 09:48 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #49`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=false`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed effectively unchanged versus `T090`: the basket remains uniformly stuck at `WAIT/neutral` even with the session gate open.
+  - The live news filter is still blocking all four symbols, so there is still no actionable candidate and no reason to override the flat stance.
+
+### T092
+
+- Timestamp: `2026-04-24 10:04 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #50`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=false`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed effectively unchanged versus `T091`: the basket remains uniformly stuck at `WAIT/neutral` even with the session gate open.
+  - The live news filter is still blocking all four symbols, so there is still no actionable candidate and no reason to override the flat stance.
+
+### T093
+
+- Timestamp: `2026-04-24 10:20 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #51`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=true`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=true`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup improved slightly on raw trigger quality versus `T092`: `ETHUSDT` and `BNBUSDT` both printed valid `15m` momentum closes.
+  - Even so, the basket remains non-actionable because the broader context is still weak across the board: all four symbols remain on `WAIT`, all four still fail the `1h` setup gate, and none has recovered a bullish `4h` bias strong enough to justify a paper long.
+
+### T094
+
+- Timestamp: `2026-04-24 10:36 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #52`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=false`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup weakened again versus `T093`: the brief intraday improvement in raw trigger quality disappeared and the basket returned to a fully uniform `WAIT/neutral` state.
+  - The live news filter is still blocking all four symbols, so there is still no actionable candidate and no reason to override the flat stance.
+
+### T095
+
+- Timestamp: `2026-04-24 10:52 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #53`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=true`, `correlation_filter=false`, `news_filter=false`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=true`, `news_filter=false`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup improved slightly on raw trigger quality versus `T094`: `ETHUSDT` and `BNBUSDT` both printed valid `15m` momentum closes.
+  - Even so, the basket remains non-actionable because the broader context is still weak across the board: all four symbols remain on `WAIT`, all four still fail the `1h` setup gate, and none has recovered a bullish `4h` bias strong enough to justify a paper long.
+  - The live news filter is also still blocking all four symbols, so there is still no reason to override the flat stance.
+
+### T096
+
+- Timestamp: `2026-04-24 11:08 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #54`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=false`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup weakened again versus `T095`: the brief improvement in raw trigger quality disappeared and the basket returned to a fully uniform `WAIT/neutral` state.
+  - The live news filter is still blocking all four symbols, and there is currently no lead candidate worth overriding the flat stance.
+
+### T097
+
+- Timestamp: `2026-04-24 11:25 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #55`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed effectively unchanged versus `T096`: the basket remains uniformly stuck at `WAIT/neutral` with no lead candidate.
+  - The situation is slightly cleaner operationally because both the session gate and the live news filter are now open, but the structure is still too weak across the board to justify any paper long.
+
+### T098
+
+- Timestamp: `2026-04-24 11:41 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #56`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=true`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=true`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup improved slightly on raw trigger quality versus `T097`: `ETHUSDT` and `SOLUSDT` both printed valid `15m` momentum closes.
+  - Even so, the basket remains non-actionable because the broader context is still weak across the board: all four symbols remain on `WAIT`, all four still fail the `1h` setup gate, and none has recovered a bullish `4h` bias strong enough to justify a paper long.
+  - The live news filter is also still blocking the whole basket, so there is still no reason to override the flat stance.
+
+### T099
+
+- Timestamp: `2026-04-24 11:58 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #57`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup weakened again versus `T098`: the small improvement in raw trigger quality disappeared and the basket returned to a fully uniform `WAIT/neutral` state.
+  - The live news filter is still blocking all four symbols, so there is still no actionable candidate and no reason to override the flat stance.
+
+### T100
+
+- Timestamp: `2026-04-24 12:14 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #58`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed effectively unchanged versus `T099`: the basket remains uniformly stuck at `WAIT/neutral` with no lead candidate.
+  - The live news filter is still blocking all four symbols, so there is still no actionable candidate and no reason to override the flat stance.
+
+### T101
+
+- Timestamp: `2026-04-24 12:30 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #59`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed effectively unchanged versus `T100`: the basket remains uniformly stuck at `WAIT/neutral` with no lead candidate.
+  - The live news filter is still blocking all four symbols, so there is still no actionable candidate and no reason to override the flat stance.
+
+### T102
+
+- Timestamp: `2026-04-24 12:46 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #60`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed effectively unchanged versus `T101`: the basket remains uniformly stuck at `WAIT/neutral` with no lead candidate.
+  - The live news filter is still blocking all four symbols, so there is still no actionable candidate and no reason to override the flat stance.
+
+### T103
+
+- Timestamp: `2026-04-24 13:02 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #61`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed effectively unchanged versus `T102`: the basket remains uniformly stuck at `WAIT/neutral` with no lead candidate.
+  - `BTCUSDT` improved slightly on raw `15m` candle quality, but the broader context is still too weak across the board because all four symbols continue to fail both the `4h` bias and `1h` setup gates.
+  - The live news filter is still blocking all four symbols, so there is still no actionable candidate and no reason to override the flat stance.
+
+### T104
+
+- Timestamp: `2026-04-24 13:18 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #62`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed effectively unchanged versus `T103`: the basket remains uniformly stuck at `WAIT/neutral` with no lead candidate.
+  - The live news filter is clear again, but that still does not help because all four symbols continue to fail both the `4h` bias and `1h` setup gates, leaving no actionable long setup.
+
+### T105
+
+- Timestamp: `2026-04-24 13:34 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #63`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed effectively unchanged versus `T104`: the basket remains uniformly stuck at `WAIT/neutral` with no lead candidate.
+  - ETHUSDT, SOLUSDT, and BNBUSDT all moved a bit closer to their `1h` support references, but none recovered enough structure to clear the setup gate, so there is still no actionable long setup.
+
+### T106
+
+- Timestamp: `2026-04-24 13:50 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #64`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed effectively unchanged versus `T105`: the basket remains uniformly stuck at `WAIT/neutral` with no lead candidate.
+  - `SOLUSDT` was the closest name to its `1h` support reference, but all four symbols still remained below support and none printed a valid `15m` momentum close, so there is still no actionable long setup.
+
+### T107
+
+- Timestamp: `2026-04-24 14:07 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #65`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=true`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - `SOLUSDT` was the clearest near-miss in this wakeup: price reclaimed the `1h` support area and printed a valid raw `15m` momentum close, but the formal setup gate still remained closed and the broader `4h` bias stayed `neutral`.
+  - The rest of the basket remained weak and unchanged, so there is still no actionable long setup and no reason to override the flat stance.
+
+### T108
+
+- Timestamp: `2026-04-24 14:24 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #66`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - `SOLUSDT` held slightly above its `1h` support reference, but the raw `15m` trigger that briefly improved in `T107` faded immediately and the broader `4h` bias still stayed `neutral`.
+  - The rest of the basket remained weak and unchanged, so there is still no actionable long setup and no reason to override the flat stance.
+
+### T109
+
+- Timestamp: `2026-04-24 14:40 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #67`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - `SOLUSDT` remained the closest name to a valid long context by holding just above its `1h` support reference, but it still failed the formal setup gate and did not confirm a valid `15m` trigger.
+  - The rest of the basket remained weak and unchanged, so there is still no actionable long setup and no reason to override the flat stance.
+
+### T110
+
+- Timestamp: `2026-04-24 14:56 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #68`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup was weaker than `T109`: `SOLUSDT` lost its slight hold above the `1h` support reference and slipped back below it, so the basket no longer has even a marginal near-miss candidate.
+  - The rest of the basket remained weak and unchanged, so there is still no actionable long setup and no reason to override the flat stance.
+
+### T111
+
+- Timestamp: `2026-04-24 15:12 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #69`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=true`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - `BNBUSDT` was the clearest near-miss in this wakeup: it printed a valid raw `15m` momentum close and came within `0.33` of the `1h` support reference, but the formal setup gate still remained closed and the broader `4h` bias stayed `neutral`.
+  - `ETHUSDT` and `SOLUSDT` both reclaimed their immediate `1h` support references, but their candle-close quality still stayed too weak to open a valid long setup.
+  - The basket therefore remained non-actionable and there is still no reason to override the flat stance.
+
+### T112
+
+- Timestamp: `2026-04-24 15:28 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #70`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup was weaker than `T111`: `BNBUSDT` lost its raw `15m` trigger confirmation, and the basket returned to a fully uniform `WAIT` state.
+  - `ETHUSDT` and `SOLUSDT` both sat marginally above their immediate `1h` support references, but the candle-close quality remained too weak and the broader `4h` bias stayed `neutral`, so there is still no actionable long setup.
+
+### T113
+
+- Timestamp: `2026-04-24 15:44 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #71`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed broadly unchanged versus `T112`: the basket remained uniformly stuck at `WAIT` with no actionable lead candidate.
+  - `SOLUSDT` was nominally the closest name to reclaiming its `1h` support reference, but it still sat slightly below it and failed the `15m` trigger gate, while `BTCUSDT` printed an almost dead `15m` candle body and added no usable momentum context.
+
+### T114
+
+- Timestamp: `2026-04-24 16:00 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #72`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup was weaker than `T113`: the basket stayed uniformly at `WAIT`, and all four symbols printed very weak `15m` candle-closes with heavy bodies finishing near the bottom of their ranges.
+  - `BTCUSDT`, `SOLUSDT`, and `BNBUSDT` all slipped materially farther below their `1h` support references, so there is no usable lead candidate and no reason to override the flat stance.
+
+### T115
+
+- Timestamp: `2026-04-24 16:16 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #73`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed broadly unchanged versus `T114`: the basket remained uniformly stuck at `WAIT` with no actionable lead candidate.
+  - `BTCUSDT`, `SOLUSDT`, and `BNBUSDT` all stayed materially below their `1h` support references, while `ETHUSDT` remained correlation-blocked and still below support, so there is still no reason to override the flat stance.
+
+### T116
+
+- Timestamp: `2026-04-24 16:32 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #74`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup was weaker than `T115`: the entire basket stayed at `WAIT` while all four symbols drifted farther below their `1h` support references.
+  - `BNBUSDT` printed the strongest raw close-location reading of the basket, but it still failed the trigger test because price did not clear the previous high and the broader setup remained invalid, so there is still no reason to override the flat stance.
+
+### T117
+
+- Timestamp: `2026-04-24 16:48 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #75`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup was weaker than `T116`: the basket stayed uniformly at `WAIT`, and all four symbols closed their latest `15m` candles essentially at the bottom of the range.
+  - `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, and `BNBUSDT` all remained below their `1h` support references, with `ETHUSDT` still correlation-blocked as well, so there is still no actionable lead candidate and no reason to override the flat stance.
+
+### T118
+
+- Timestamp: `2026-04-24 17:04 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #76`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed effectively unchanged versus `T117`: the basket remained uniformly at `WAIT`, and all four symbols again printed very weak `15m` closes near the bottom of their ranges.
+  - `BTCUSDT`, `ETHUSDT`, and `SOLUSDT` all remained materially below their `1h` support references, while `BNBUSDT` came closest but still stayed just below support and printed a dead-on-arrival trigger candle, so there is still no actionable lead candidate and no reason to override the flat stance.
+
+### T119
+
+- Timestamp: `2026-04-24 17:20 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #77`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed broadly unchanged versus `T118`: the basket remained uniformly at `WAIT` and none of the four symbols recovered a usable setup.
+  - `BTCUSDT`, `SOLUSDT`, and `BNBUSDT` all remained below their `1h` support references, while `ETHUSDT` stayed correlation-blocked and also below support; the latest `15m` candles were effectively dead across the basket, so there is still no actionable lead candidate and no reason to override the flat stance.
+
+### T120
+
+- Timestamp: `2026-04-24 17:36 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #78`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed non-actionable, but `BNBUSDT` became the clearest near-miss by reclaiming its `1h` support reference by `0.10`; it still failed the `15m` trigger gate and the broader `4h` bias remained `neutral`.
+  - `BTCUSDT`, `ETHUSDT`, and `SOLUSDT` all remained below their `1h` support references, with `ETHUSDT` still correlation-blocked as well, so there is still no actionable lead candidate and no reason to override the flat stance.
+
+### T121
+
+- Timestamp: `2026-04-24 17:52 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #79`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed non-actionable, but `BNBUSDT` remained the clearest near-miss by holding `1.54` above its `1h` support reference; it still failed the `15m` trigger gate and the broader `4h` bias remained `neutral`.
+  - `BTCUSDT`, `ETHUSDT`, and `SOLUSDT` all remained below their `1h` support references, with `ETHUSDT` still correlation-blocked as well, so there is still no actionable lead candidate and no reason to override the flat stance.
+
+### T122
+
+- Timestamp: `2026-04-24 18:08 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #80`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed non-actionable, with `BNBUSDT` again the clearest near-miss by holding `1.27` above its `1h` support reference; it still failed the `15m` trigger gate and the broader `4h` bias remained `neutral`.
+  - `BTCUSDT`, `ETHUSDT`, and `SOLUSDT` all remained below their `1h` support references, with `ETHUSDT` still correlation-blocked as well, so there is still no actionable lead candidate and no reason to override the flat stance.
+
+### T123
+
+- Timestamp: `2026-04-24 18:24 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #81`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed non-actionable, with `BNBUSDT` again the clearest near-miss by holding `0.17` above its `1h` support reference; it still failed the `15m` trigger gate and the broader `4h` bias remained `neutral`.
+  - `BTCUSDT`, `ETHUSDT`, and `SOLUSDT` all remained below their `1h` support references, with `ETHUSDT` still correlation-blocked as well, so there is still no actionable lead candidate and no reason to override the flat stance.
+
+### T124
+
+- Timestamp: `2026-04-24 18:40 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #82`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=false`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup was weaker than `T123`: the whole basket stayed at `WAIT`, all four symbols failed both the `1h` setup and `15m` trigger gates, and a fresh `news blackout` reactivated across the entire basket.
+  - `BNBUSDT` lost its slight hold above the `1h` support reference and slipped back below it, so there is again no usable lead candidate and no reason to override the flat stance.
+
+### T125
+
+- Timestamp: `2026-04-24 18:56 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #83`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=false`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed non-actionable and broadly unchanged versus `T124`: the whole basket remained at `WAIT`, all four symbols still failed both the `1h` setup and `15m` trigger gates, and the `news blackout` remained active across the entire basket.
+  - `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, and `BNBUSDT` all remained below their `1h` support references, so there is still no usable lead candidate and no reason to override the flat stance.
+
+### T126
+
+- Timestamp: `2026-04-24 19:12 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #84`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=false`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed non-actionable under the still-active `news blackout`, although `SOLUSDT` printed a valid raw `15m` momentum close and `BNBUSDT` held `0.42` above its `1h` support reference.
+  - Neither near-miss cleared the full setup stack: `SOLUSDT` still sat below `1h` support, `BNBUSDT` still failed the `15m` trigger gate, and the broader `4h` bias remained `neutral`, so there is still no reason to override the flat stance.
+
+### T127
+
+- Timestamp: `2026-04-24 19:28 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #85`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=false`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed non-actionable and broadly unchanged versus `T126`: the still-active `news blackout` kept blocking the full basket while all four symbols remained at `WAIT`.
+  - `BNBUSDT` slipped back below its `1h` support reference, `SOLUSDT` lost the previous raw trigger improvement, and `ETHUSDT` remained correlation-blocked, so there is still no usable lead candidate and no reason to override the flat stance.
+
+### T128
+
+- Timestamp: `2026-04-24 19:44 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #86`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=false`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed non-actionable and broadly unchanged versus `T127`: the still-active `news blackout` kept the full basket blocked while all four symbols remained at `WAIT`.
+  - `BTCUSDT` and `ETHUSDT` printed stronger raw close-location readings, but neither cleared the prior-high requirement and both still sat below `1h` support, so there is still no usable lead candidate and no reason to override the flat stance.
+
+### T129
+
+- Timestamp: `2026-04-24 20:00 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #87`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=false`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=false`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed non-actionable and broadly unchanged versus `T128`: the still-active `news blackout` kept the full basket blocked while all four symbols remained at `WAIT`.
+  - `ETHUSDT` was the closest name to reclaiming its updated `1h` support reference, but it still sat below support and remained correlation-blocked, while `BNBUSDT` drifted materially below its new support reference, so there is still no usable lead candidate and no reason to override the flat stance.
+
+### T130
+
+- Timestamp: `2026-04-24 20:16 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #88`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed non-actionable even after the `news blackout` cleared: the whole basket remained at `WAIT` and all four symbols still failed both the `1h` setup and `15m` trigger gates.
+  - `BTCUSDT`, `SOLUSDT`, and `BNBUSDT` all slipped materially farther below their updated `1h` support references, while `ETHUSDT` remained correlation-blocked and still below support, so there is still no usable lead candidate and no reason to override the flat stance.
+
+### T131
+
+- Timestamp: `2026-04-24 20:32 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #89`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed non-actionable even after the `news blackout` cleared again: the whole basket remained at `WAIT` and all four symbols still failed both the `1h` setup and `15m` trigger gates.
+  - `BNBUSDT` showed the strongest raw trigger improvement of the basket by closing above the previous high, but it still sat materially below `1h` support and the broader `4h` bias remained `neutral`, so there is still no usable lead candidate and no reason to override the flat stance.
+
+### T132
+
+- Timestamp: `2026-04-24 20:48 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #90`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=true`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed non-actionable even after the `news blackout` cleared again: the whole basket remained at `WAIT` and all four symbols still failed the `1h` setup gate.
+  - `BNBUSDT` became the clearest near-miss by printing a valid raw `15m` momentum close, but it still sat materially below its updated `1h` support reference and the broader `4h` bias remained `neutral`, so there is still no usable lead candidate and no reason to override the flat stance.
+
+### T133
+
+- Timestamp: `2026-04-24 21:04 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #91`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed non-actionable with the `news blackout` still clear: the whole basket remained at `WAIT` and all four symbols still failed the `1h` setup gate.
+  - `ETHUSDT` came closest to reclaiming its `1h` support reference, sitting only `0.61` below it, but it remained correlation-blocked and still lacked a valid `15m` trigger; the other three symbols stayed materially below support, so there is still no usable lead candidate and no reason to override the flat stance.
+
+### T134
+
+- Timestamp: `2026-04-24 21:20 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #92`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed non-actionable with the `news blackout` still clear: the whole basket remained at `WAIT` and all four symbols still failed the `1h` setup gate.
+  - `ETHUSDT` remained the closest name to reclaiming its `1h` support reference, sitting only `0.42` below it, but it remained correlation-blocked and still lacked a valid `15m` trigger; the other three symbols stayed materially below support, so there is still no usable lead candidate and no reason to override the flat stance.
+
+### T135
+
+- Timestamp: `2026-04-24 21:36 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #93`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed non-actionable with the `news blackout` still clear: the whole basket remained at `WAIT` and all four symbols still failed the `1h` setup gate.
+  - `ETHUSDT` remained the closest name to reclaiming its `1h` support reference, but it still sat `1.75` below support, remained correlation-blocked, and lacked a valid `15m` trigger; the other three symbols stayed materially below support, so there is still no usable lead candidate and no reason to override the flat stance.
+
+### T136
+
+- Timestamp: `2026-04-24 21:52 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #94`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed non-actionable with the `news blackout` still clear: the whole basket remained at `WAIT` and all four symbols still failed the `1h` setup gate.
+  - `ETHUSDT` again came closest to reclaiming its `1h` support reference, but it still sat `2.68` below support, remained correlation-blocked, and lacked a valid `15m` trigger; the other three symbols stayed materially below support, so there is still no usable lead candidate and no reason to override the flat stance.
+
+### T137
+
+- Timestamp: `2026-04-24 22:08 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #95`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed non-actionable with the `news blackout` still clear: the whole basket remained at `WAIT` and all four symbols still failed the `1h` setup gate.
+  - `ETHUSDT` again came closest to reclaiming its `1h` support reference, but it still sat `4.03` below support, remained correlation-blocked, and lacked a valid `15m` trigger; the other three symbols stayed materially below support, so there is still no usable lead candidate and no reason to override the flat stance.
+
+### T138
+
+- Timestamp: `2026-04-24 22:24 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #96`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed non-actionable with the `news blackout` still clear: the whole basket remained at `WAIT` and all four symbols still failed the `1h` setup gate.
+  - It was weaker than `T137` on raw candle quality: all four names printed heavy `15m` candles that closed near the bottom of their ranges while also remaining below support, so there is still no usable lead candidate and no reason to override the flat stance.
+
+### T139
+
+- Timestamp: `2026-04-24 22:40 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #97`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=true`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=true`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `session_filter=true`, `1h_setup=false`, `15m_trigger=true`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup was technically stronger than `T138`: `ETHUSDT`, `SOLUSDT`, and `BNBUSDT` all printed valid raw `15m` momentum closes, and `BNBUSDT` improved to a `bullish` bias with `confidence=60`.
+  - Even so, the whole basket remained non-actionable because all four symbols still failed the `1h` setup gate; `ETHUSDT` also remained correlation-blocked, and `BNBUSDT` still sat `2.75` below its support reference, so there is still no reason to override the flat stance.
+
+### T140
+
+- Timestamp: `2026-04-24 22:56 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #98`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=true`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=true`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup was technically stronger than `T139`: `BTCUSDT` and `ETHUSDT` both printed exceptionally strong raw `15m` momentum closes, while `BNBUSDT` retained a `bullish` bias with `confidence=60`.
+  - Even so, the basket remained non-actionable because all four symbols still failed the `1h` setup gate; `ETHUSDT` also remained correlation-blocked, and `BNBUSDT` still sat materially below its support reference, so there is still no reason to override the flat stance.
+
+### T141
+
+- Timestamp: `2026-04-24 23:12 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #99`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup was weaker than `T140`: the prior raw `15m` momentum improvement disappeared and the whole basket reverted to a uniform `WAIT` state.
+  - `ETHUSDT` and `SOLUSDT` both briefly held just above their `1h` support references, but neither produced a valid `15m` trigger and `ETHUSDT` remained correlation-blocked; `BNBUSDT` kept a `bullish` bias but still sat materially below support, so there is still no usable lead candidate and no reason to override the flat stance.
+
+### T142
+
+- Timestamp: `2026-04-24 23:28 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #100`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed non-actionable with the `news blackout` still clear: the whole basket remained at `WAIT` and all four symbols still failed the `1h` setup gate.
+  - `ETHUSDT` again came closest to reclaiming its `1h` support reference, but it still sat `5.55` below support, remained correlation-blocked, and lacked a valid `15m` trigger; the other three symbols also stayed below support, so there is still no usable lead candidate and no reason to override the flat stance.
+
+### T143
+
+- Timestamp: `2026-04-24 23:44 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #101`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=true`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed non-actionable with the `news blackout` still clear: the whole basket remained at `WAIT` and all four symbols still failed the `1h` setup gate.
+  - Raw candle shape became unusual across the basket, with several `15m` candles closing at the top of their ranges despite failing the prior-high rule; even so, every symbol remained below support and there is still no usable lead candidate or reason to override the flat stance.
+
+### T144
+
+- Timestamp: `2026-04-25 00:00 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #102`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup was structurally weaker than `T143` because the session gate closed for the full basket, making new entries formally disallowed even before considering setup quality.
+  - All four symbols also remained below their `1h` support references, with `ETHUSDT` still correlation-blocked, so there is still no usable lead candidate and no reason to override the flat stance.
+
+### T145
+
+- Timestamp: `2026-04-25 00:16 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #103`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed structurally non-tradable because the session gate remained closed for the full basket, making new entries formally disallowed even before considering setup quality.
+  - `BNBUSDT` retained a `bullish` bias with `confidence=60`, but it still sat materially below support and lacked a valid `15m` trigger; the other three symbols also remained below support, so there is still no usable lead candidate and no reason to override the flat stance.
+
+### T146
+
+- Timestamp: `2026-04-25 00:32 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #104`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed structurally non-tradable because the session gate remained closed for the full basket, making new entries formally disallowed even before considering setup quality.
+  - It was weaker than `T145`: `BNBUSDT` lost its earlier bullish bias and the whole basket reverted to a uniform `WAIT/neutral` overnight state while all four symbols remained below their `1h` support references.
+
+### T147
+
+- Timestamp: `2026-04-25 00:48 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #105`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed structurally non-tradable because the session gate remained closed for the full basket, making new entries formally disallowed even before considering setup quality.
+  - It was weaker than `T146`: all four symbols slipped even farther below their `1h` support references overnight, with `BTCUSDT`, `ETHUSDT`, and `BNBUSDT` all printing especially poor trigger quality on the latest `15m` candles.
+
+### T148
+
+- Timestamp: `2026-04-25 01:04 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #106`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=true`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed structurally non-tradable because the session gate remained closed for the full basket, making new entries formally disallowed even before considering setup quality.
+  - `ETHUSDT` was the clearest overnight near-miss by printing a valid raw `15m` momentum close, but it still sat `18.95` below its `1h` support reference and remained correlation-blocked, while the rest of the basket stayed weak and below support.
+
+### T149
+
+- Timestamp: `2026-04-25 01:20 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #107`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed structurally non-tradable because the session gate remained closed for the full basket, making new entries formally disallowed even before considering setup quality.
+  - It was weaker than `T148`: `ETHUSDT` lost the prior raw `15m` trigger improvement, `BNBUSDT` remained neutral, and all four symbols stayed materially below their `1h` support references overnight.
+
+### T150
+
+- Timestamp: `2026-04-25 01:36 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #108`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=true`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed structurally non-tradable because the session gate remained closed for the full basket, making new entries formally disallowed even before considering setup quality.
+  - `ETHUSDT` regained a valid raw `15m` momentum close, but it still sat `16.52` below its `1h` support reference and remained correlation-blocked; the rest of the basket stayed below support and also lacked valid trigger confirmation.
+
+### T151
+
+- Timestamp: `2026-04-25 01:52 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #109`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed structurally non-tradable because the session gate remained closed for the full basket, making new entries formally disallowed even before considering setup quality.
+  - It was weaker than `T150`: `ETHUSDT` lost the prior raw `15m` trigger improvement, and all four symbols remained materially below their `1h` support references overnight.
+
+### T152
+
+- Timestamp: `2026-04-25 02:08 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #110`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=false`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed structurally non-tradable because the session gate remained closed for the full basket, making new entries formally disallowed even before considering setup quality.
+  - `BNBUSDT` regained a `bullish` bias with `confidence=60`, but it still sat materially below its `1h` support reference and lacked a valid `15m` trigger; the other three symbols also remained below support, so there is still no usable lead candidate and no reason to override the flat stance.
+
+### T153
+
+- Timestamp: `2026-04-25 02:24 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #111`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=true`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=bullish`, `confidence=60`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed structurally non-tradable because the session gate remained closed for the full basket, making new entries formally disallowed even before considering setup quality.
+  - `BNBUSDT` kept a `bullish` bias with `confidence=60`, but it slipped even farther below its `1h` support reference and still lacked a valid `15m` trigger; the rest of the basket also stayed below support, so there is still no usable lead candidate and no reason to override the flat stance.
+
+### T154
+
+- Timestamp: `2026-04-25 02:40 Europe/Ljubljana`
+- Status: `done`
+- Scope: `Realtime campaign heartbeat scan #112`
+- Goal: Inspect the live basket after the session window reopened, confirm paper-account cleanliness, and open at most one observation trade only if a clean `READY` signal appears.
+- Inputs:
+  - Endpoint: `GET /api/dashboard`
+  - Symbols: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+  - Account state before scan: `0 positions`, `0 orders`, `0 trades`, `cash=10000.0000`, `realized_pnl=0.0000`
+- Result:
+  - `BTCUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `ETHUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `correlation_filter=true`, `news_filter=true`
+  - `SOLUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+  - `BNBUSDT`: `stage=wait`, `bias=neutral`, `confidence=25`, `session_filter=false`, `1h_setup=false`, `15m_trigger=false`, `news_filter=true`
+- Decision:
+  - No paper trade opened.
+- Notes:
+  - The paper account remains fully flat and clean.
+  - No symbol reached a clean `READY` state, so no observation trade was opened.
+  - This wakeup stayed structurally non-tradable because the session gate remained closed for the full basket, making new entries formally disallowed even before considering setup quality.
+  - It was weaker than `T153`: `BNBUSDT` lost the prior bullish bias again, and all four symbols remained materially below their `1h` support references overnight.
+
+### Research campaign 2026-04-26 00:40 Srednjeevropski poletni čas  
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\smoke_research_harness.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT`
+- Candidates tested: `6`
+- Top candidate: `v2_reclaim`
+- Top OOS: `trades=0`, `net_total_r=0`, `net_avg_r=0.0`, `pf=0.0`
+- Top gate status: `fail`
+- Top gate failures: `not_full_12000_candle_walk_forward, executed_trades<80, net_avg_r<0.1, profit_factor<1.25, holdout_net_total_r<=0, holdout_net_avg_r<0.05, folds_positive<4`
+- Promoted strategies: `none`
+
+
+### Research campaign 2026-04-26 00:40 Srednjeevropski poletni čas  
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\smoke_research_harness_all_candidates.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT`
+- Candidates tested: `16`
+- Top candidate: `v2_reclaim`
+- Top OOS: `trades=0`, `net_total_r=0`, `net_avg_r=0.0`, `pf=0.0`
+- Top gate status: `fail`
+- Top gate failures: `not_full_12000_candle_walk_forward, executed_trades<80, net_avg_r<0.1, profit_factor<1.25, holdout_net_total_r<=0, holdout_net_avg_r<0.05, folds_positive<4`
+- Promoted strategies: `none`
+
+
+### Realtime paper heartbeat 2026-04-25T23:25:06Z
+
+- Status: `done`
+- Scope: `realtime-paper-test`
+- Account: `cash=10000.00`, `positions=0`, `orders=0`
+- BTCUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`
+- ETHUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`
+- SOLUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`
+- BNBUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`
+- Decision: no paper trade opened; no symbol had a clean `READY` signal and the session gate was closed.
+- Research note: full research harness process is still active; no final full-run artifact has been written yet.
+
+### Realtime paper heartbeat 2026-04-25T23:41:09Z
+
+- Status: `done`
+- Scope: `realtime-paper-test`
+- Account: `cash=10000.00`, `positions=0`, `orders=0`
+- BTCUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`
+- ETHUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`
+- SOLUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`
+- BNBUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`
+- Decision: no paper trade opened; no symbol had a clean `READY` signal and the session gate was closed.
+- Research note: full research harness progressed to `v2_reclaim_strong_trigger`; no final full-run artifact has been written yet.
+
+### Realtime paper heartbeat 2026-04-25T23:57:37Z
+
+- Status: `done`
+- Scope: `realtime-paper-test`
+- Account: `cash=10000.00`, `positions=0`, `orders=0`
+- BTCUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`
+- ETHUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`
+- SOLUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`
+- BNBUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`
+- Decision: no paper trade opened; no symbol had a clean `READY` signal and the session gate was closed.
+- Research note: full research harness progressed to `v2_reclaim_serial`; no final full-run artifact has been written yet.
+
+### Realtime paper heartbeat 2026-04-26T00:13:32Z
+
+- Status: `done`
+- Scope: `realtime-paper-test`
+- Account: `cash=10000.00`, `positions=0`, `orders=0`
+- BTCUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`
+- ETHUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`
+- SOLUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`
+- BNBUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`
+- Decision: no paper trade opened; no symbol had a clean `READY` signal and the session gate was closed.
+- Research note: full research harness progressed to `v2_reclaim_partial_no_be`; no final full-run artifact has been written yet.
+
+### Realtime paper heartbeat 2026-04-26T00:29:31Z
+
+- Status: `done`
+- Scope: `realtime-paper-test`
+- Account: `cash=10000.00`, `positions=0`, `orders=0`
+- BTCUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`
+- ETHUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`
+- SOLUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`
+- BNBUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`
+- Decision: no paper trade opened; no symbol had a clean `READY` signal and the session gate was closed.
+- Research note: full research harness progressed to `v2_reclaim_time_stop_16`; no final full-run artifact has been written yet.
+
+### Realtime paper heartbeat 2026-04-26T00:46:02Z
+
+- Status: `done`
+- Scope: `realtime-paper-test`
+- Account: `cash=10000.00`, `positions=0`, `open_orders=0`, `equity=10000.00`
+- BTCUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- ETHUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- SOLUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- BNBUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- Decision: no paper trade opened; no symbol had a clean `READY` signal and the session gate was closed.
+- Research note: full research harness is still running and has progressed to `v2_reclaim_no_be_trail`; no final full-run artifact has been written yet.
+
+### Realtime paper heartbeat 2026-04-26T01:02:32Z
+
+- Status: `done`
+- Scope: `realtime-paper-test`
+- Account: `cash=10000.00`, `positions=0`, `open_orders=0`, `equity=10000.00`
+- BTCUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- ETHUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- SOLUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- BNBUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- Decision: no paper trade opened; no symbol had a clean `READY` signal and the session gate was closed.
+- Research note: full research harness is still running and has progressed to `v2_reclaim_btc_bullish`; no final full-run artifact has been written yet.
+
+### Realtime paper heartbeat 2026-04-26T01:18:33Z
+
+- Status: `done`
+- Scope: `realtime-paper-test`
+- Account: `cash=10000.00`, `positions=0`, `open_orders=0`, `equity=10000.00`
+- BTCUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- ETHUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- SOLUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- BNBUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- Decision: no paper trade opened; no symbol had a clean `READY` signal and the session gate was closed.
+- Research note: full research harness is still running and has progressed to `v2_reclaim_atr_expansion`; no final full-run artifact has been written yet.
+
+### Realtime paper heartbeat 2026-04-26T01:34:33Z
+
+- Status: `done`
+- Scope: `realtime-paper-test`
+- Account: `cash=10000.00`, `positions=0`, `open_orders=0`, `equity=10000.00`
+- BTCUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- ETHUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- SOLUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- BNBUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- Decision: no paper trade opened; no symbol had a clean `READY` signal and the session gate was closed.
+- Research note: full research harness is still running and has progressed to `v2_reclaim_overlap_only`; no final full-run artifact has been written yet.
+
+### Realtime paper heartbeat 2026-04-26T01:50:33Z
+
+- Status: `done`
+- Scope: `realtime-paper-test`
+- Account: `cash=10000.00`, `positions=0`, `open_orders=0`, `equity=10000.00`
+- BTCUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- ETHUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- SOLUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- BNBUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- Decision: no paper trade opened; no symbol had a clean `READY` signal and the session gate was closed.
+- Research note: full research harness is still running and has progressed to `opening_session_breakout`; no final full-run artifact has been written yet.
+
+### Research campaign 2026-04-26T02:02:18Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\research_run_20260426_040218.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT, AXSUSDT, TRUMPUSDT, USD1USDT, APEUSDT, DOGEUSDT, XRPUSDT, HYPERUSDT, BNBUSDT, API3USDT, ZBTUSDT, ZECUSDT, TRXUSDT, ORCAUSDT, ADAUSDT, PEPEUSDT, SANDUSDT, MOVRUSDT`
+- Candidates tested: `18`
+- Top candidate: `v2_reclaim_overlap_only`
+- Top OOS: `trades=16`, `net_total_r=-2.9538`, `net_avg_r=-0.1846`, `pf=0.664`
+- Top gate status: `fail`
+- Top gate failures: `executed_trades<80, net_avg_r<0.1, profit_factor<1.25, holdout_net_total_r<=0, holdout_net_avg_r<0.05, folds_positive<4, symbol_concentration>0.4`
+- Promoted strategies: `none`
+
+
+### Realtime paper heartbeat 2026-04-26T02:06:33Z
+
+- Status: `done`
+- Scope: `realtime-paper-test`
+- Account: `cash=10000.00`, `positions=0`, `open_orders=0`, `equity=10000.00`
+- BTCUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- ETHUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- SOLUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- BNBUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- Decision: no paper trade opened; no symbol had a clean `READY` signal and no strategy is promoted.
+- Research result: full run completed and wrote `tmp/research_runs/research_run_20260426_040218.json`; `0` candidates passed promotion gates.
+- Best candidate by harness ranking: `v2_reclaim_overlap_only`, `out_of_sample_trades=16`, `net_total_r=-2.9538`, `net_avg_r=-0.1846`, `profit_factor=0.664`, `holdout_net_r=-2.3581`, `folds_positive=1`.
+- Automation update: `realtime-paper-test` now blocks new paper entries unless a strategy is explicitly promoted after passing campaign gates.
+
+### Realtime paper heartbeat 2026-04-26T02:24:33Z
+
+- Status: `done`
+- Scope: `realtime-paper-test`
+- Account: `cash=10000.00`, `positions=0`, `open_orders=0`, `equity=10000.00`
+- BTCUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- ETHUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- SOLUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- BNBUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- Decision: no paper trade opened; no symbol had a clean `READY` signal and no strategy is promoted.
+- Research note: no new research artifact after `tmp/research_runs/research_run_20260426_040218.json`; full research process is no longer running.
+
+### Realtime paper heartbeat 2026-04-26T02:41:34Z
+
+- Status: `done`
+- Scope: `realtime-paper-test`
+- Account: `cash=10000.00`, `positions=0`, `open_orders=0`, `equity=10000.00`
+- BTCUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- ETHUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- SOLUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- BNBUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- Decision: no paper trade opened; no symbol had a clean `READY` signal and no strategy is promoted.
+- Research note: no new research artifact after `tmp/research_runs/research_run_20260426_040218.json`; full research process is not running.
+
+### Realtime paper heartbeat 2026-04-26T02:58:34Z
+
+- Status: `done`
+- Scope: `realtime-paper-test`
+- Account: `cash=10000.00`, `positions=0`, `open_orders=0`, `equity=10000.00`
+- BTCUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- ETHUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- SOLUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- BNBUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- Decision: no paper trade opened; no symbol had a clean `READY` signal and no strategy is promoted.
+- Research note: no new research artifact after `tmp/research_runs/research_run_20260426_040218.json`; full research process is not running.
+
+### Realtime paper heartbeat 2026-04-26T03:15:34Z
+
+- Status: `done`
+- Scope: `realtime-paper-test`
+- Account: `cash=10000.00`, `positions=0`, `open_orders=0`, `equity=10000.00`
+- BTCUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- ETHUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=false`, `news=true`, `risk_plan=false`
+- SOLUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- BNBUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- Decision: no paper trade opened; no symbol had a clean `READY` signal and no strategy is promoted.
+- Research note: no new research artifact after `tmp/research_runs/research_run_20260426_040218.json`; full research process is not running.
+
+### Realtime paper heartbeat 2026-04-26T03:32:35Z
+
+- Status: `done`
+- Scope: `realtime-paper-test`
+- Account: `cash=10000.00`, `positions=0`, `open_orders=0`, `equity=10000.00`
+- BTCUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- ETHUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=false`, `news=true`, `risk_plan=false`
+- SOLUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- BNBUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- Decision: no paper trade opened; no symbol had a clean `READY` signal and no strategy is promoted.
+- Research note: no new research artifact after `tmp/research_runs/research_run_20260426_040218.json`; full research process is not running.
+
+### Realtime paper heartbeat 2026-04-26T03:49:35Z
+
+- Status: `done`
+- Scope: `realtime-paper-test`
+- Account: `cash=10000.00`, `positions=0`, `open_orders=0`, `equity=10000.00`
+- BTCUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- ETHUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=false`, `news=true`, `risk_plan=false`
+- SOLUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- BNBUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- Decision: no paper trade opened; no symbol had a clean `READY` signal and no strategy is promoted.
+- Research note: no new research artifact after `tmp/research_runs/research_run_20260426_040218.json`; full research process is not running.
+
+### Realtime paper heartbeat 2026-04-26T04:06:35Z
+
+- Status: `done`
+- Scope: `realtime-paper-test`
+- Account: `cash=10000.00`, `positions=0`, `open_orders=0`, `equity=10000.00`
+- BTCUSDT: `stage=wait`, `bias=bearish`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- ETHUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=false`, `news=true`, `risk_plan=false`
+- SOLUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- BNBUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- Decision: no paper trade opened; no symbol had a clean `READY` signal and no strategy is promoted.
+- Research note: no new research artifact after `tmp/research_runs/research_run_20260426_040218.json`; full research process is not running.
+
+### Realtime paper heartbeat 2026-04-26T04:23:35Z
+
+- Status: `done`
+- Scope: `realtime-paper-test`
+- Account: `cash=10000.00`, `positions=0`, `open_orders=0`, `equity=10000.00`
+- BTCUSDT: `stage=wait`, `bias=bearish`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- ETHUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=false`, `news=true`, `risk_plan=false`
+- SOLUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- BNBUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- Decision: no paper trade opened; no symbol had a clean `READY` signal and no strategy is promoted.
+- Research note: no new research artifact after `tmp/research_runs/research_run_20260426_040218.json`; full research process is not running.
+
+### Realtime paper heartbeat 2026-04-26T04:40:36Z
+
+- Status: `done`
+- Scope: `realtime-paper-test`
+- Account: `cash=10000.00`, `positions=0`, `open_orders=0`, `equity=10000.00`
+- BTCUSDT: `stage=wait`, `bias=bearish`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- ETHUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=false`, `news=true`, `risk_plan=false`
+- SOLUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- BNBUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- Decision: no paper trade opened; no symbol had a clean `READY` signal and no strategy is promoted.
+- Research note: no new research artifact after `tmp/research_runs/research_run_20260426_040218.json`; full research process is not running.
+
+### Realtime paper heartbeat 2026-04-26T04:57:36Z
+
+- Status: `done`
+- Scope: `realtime-paper-test`
+- Account: `cash=10000.00`, `positions=0`, `open_orders=0`, `equity=10000.00`
+- BTCUSDT: `stage=wait`, `bias=bearish`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- ETHUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=false`, `news=true`, `risk_plan=false`
+- SOLUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- BNBUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- Decision: no paper trade opened; no symbol had a clean `READY` signal and no strategy is promoted.
+- Research note: no new research artifact after `tmp/research_runs/research_run_20260426_040218.json`; full research process is not running.
+
+### Realtime paper heartbeat 2026-04-26T05:14:36Z
+
+- Status: `done`
+- Scope: `realtime-paper-test`
+- Account: `cash=10000.00`, `positions=0`, `open_orders=0`, `equity=10000.00`
+- BTCUSDT: `stage=wait`, `bias=bearish`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- ETHUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=false`, `news=true`, `risk_plan=false`
+- SOLUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- BNBUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- Decision: no paper trade opened; no symbol had a clean `READY` signal and no strategy is promoted.
+- Research note: no new research artifact after `tmp/research_runs/research_run_20260426_040218.json`; full research process is not running.
+
+### Realtime paper heartbeat 2026-04-26T05:31:36Z
+
+- Status: `done`
+- Scope: `realtime-paper-test`
+- Account: `cash=10000.00`, `positions=0`, `open_orders=0`, `equity=10000.00`
+- BTCUSDT: `stage=wait`, `bias=bearish`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- ETHUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=false`, `news=true`, `risk_plan=false`
+- SOLUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- BNBUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- Decision: no paper trade opened; no symbol had a clean `READY` signal and no strategy is promoted.
+- Research note: no new research artifact after `tmp/research_runs/research_run_20260426_040218.json`; full research process is not running.
+
+### Realtime paper heartbeat 2026-04-26T05:48:37Z
+
+- Status: `done`
+- Scope: `realtime-paper-test`
+- Account: `cash=10000.00`, `positions=0`, `open_orders=0`, `equity=10000.00`
+- BTCUSDT: `stage=wait`, `bias=bearish`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- ETHUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=false`, `news=true`, `risk_plan=false`
+- SOLUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- BNBUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- Decision: no paper trade opened; no symbol had a clean `READY` signal and no strategy is promoted.
+- Research note: no new research artifact after `tmp/research_runs/research_run_20260426_040218.json`; full research process is not running.
+
+### Realtime paper heartbeat 2026-04-26T06:05:37Z
+
+- Status: `done`
+- Scope: `realtime-paper-test`
+- Account: `cash=10000.00`, `positions=0`, `open_orders=0`, `equity=10000.00`
+- BTCUSDT: `stage=wait`, `bias=bearish`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- ETHUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=false`, `news=true`, `risk_plan=false`
+- SOLUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- BNBUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- Decision: no paper trade opened; no symbol had a clean `READY` signal and no strategy is promoted.
+- Research note: no new research artifact after `tmp/research_runs/research_run_20260426_040218.json`; full research process is not running.
+
+### Realtime paper heartbeat 2026-04-26T06:22:37Z
+
+- Status: `done`
+- Scope: `realtime-paper-test`
+- Account: `cash=10000.00`, `positions=0`, `open_orders=0`, `equity=10000.00`
+- BTCUSDT: `stage=wait`, `bias=bearish`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- ETHUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=false`, `news=true`, `risk_plan=false`
+- SOLUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- BNBUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- Decision: no paper trade opened; no symbol had a clean `READY` signal and no strategy is promoted.
+- Research note: no new research artifact after `tmp/research_runs/research_run_20260426_040218.json`; full research process is not running.
+
+### Realtime paper heartbeat 2026-04-26T06:39:38Z
+
+- Status: `done`
+- Scope: `realtime-paper-test`
+- Account: `cash=10000.00`, `positions=0`, `open_orders=0`, `equity=10000.00`
+- BTCUSDT: `stage=wait`, `bias=bearish`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- ETHUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=false`, `news=true`, `risk_plan=false`
+- SOLUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- BNBUSDT: `stage=wait`, `bias=neutral`, `confidence=15`, `trend=false`, `setup=false`, `reclaim=false`, `trigger=false`, `session=false`, `correlation=true`, `news=true`, `risk_plan=false`
+- Decision: no paper trade opened; no symbol had a clean `READY` signal and no strategy is promoted.
+- Research note: no new research artifact after `tmp/research_runs/research_run_20260426_040218.json`; full research process is not running.
+- Automation note: changed `realtime-paper-test` from frequent guard checks to one daily guard scan because no strategy is promoted and intraday paper entries are blocked.
+
+### Research campaign 2026-04-26T09:52:44Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\smoke_research_harness_strict_workers.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT`
+- Candidates tested: `6`
+- Universe filter: `profile=strict`, `min_quote_volume=10000000.0`
+- Top candidate: `v2_reclaim_loose`
+- Top OOS: `trades=3`, `net_total_r=-3.8257`, `net_avg_r=-1.2752`, `pf=0.0`
+- Top gate status: `fail`
+- Top gate failures: `not_full_12000_candle_walk_forward, executed_trades<80, net_avg_r<0.1, profit_factor<1.25, holdout_net_total_r<=0, holdout_net_avg_r<0.05, folds_positive<4, symbol_concentration>0.4, single_trade_concentration>0.25`
+- Top gate failure counts: `not_full_12000_candle_walk_forward=6, executed_trades<80=6, net_avg_r<0.1=6, profit_factor<1.25=6, holdout_net_total_r<=0=6`
+- Promoted strategies: `none`
+
+
+### Research campaign 2026-04-26T09:54:19Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\smoke_research_harness_strict_core_workers.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT`
+- Candidates tested: `6`
+- Universe filter: `profile=strict`, `min_quote_volume=5000000.0`
+- Top candidate: `v2_reclaim_loose`
+- Top OOS: `trades=3`, `net_total_r=-3.8257`, `net_avg_r=-1.2752`, `pf=0.0`
+- Top gate status: `fail`
+- Top gate failures: `not_full_12000_candle_walk_forward, executed_trades<80, net_avg_r<0.1, profit_factor<1.25, holdout_net_total_r<=0, holdout_net_avg_r<0.05, folds_positive<4, symbol_concentration>0.4, single_trade_concentration>0.25`
+- Top gate failure counts: `not_full_12000_candle_walk_forward=6, executed_trades<80=6, net_avg_r<0.1=6, profit_factor<1.25=6, holdout_net_total_r<=0=6`
+- Promoted strategies: `none`
+
+
+### Research harness implementation 2026-04-26T09:56:47Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Changes: stricter mature/core universe selection, non-standard/stable/leveraged/meme/event symbol rejection, `--workers` parallel candidate evaluation, faster closed-candle prefix lookup, and JSON/log diagnostics.
+- Smoke check: `python scripts/research_harness.py --smoke --workers 2 --json-out tmp\research_runs\smoke_research_harness_strict_core_workers.json` passed.
+- Top-20 sanity check: `python scripts\research_harness.py --trigger-limit 1000 --universe-limit 20 --max-candidates 1 --workers 2 --no-log --json-out tmp\research_runs\sanity_research_harness_strict_core_top20.json` passed.
+- Strict sanity universe: `BTCUSDT, ETHUSDT, SOLUSDT, AXSUSDT, XRPUSDT, BNBUSDT, RAYUSDT, ZECUSDT, TONUSDT, TRXUSDT, INJUSDT, ADAUSDT, SUIUSDT, AAVEUSDT, SANDUSDT, LINKUSDT, AVAXUSDT, ALGOUSDT, LTCUSDT, GALAUSDT`.
+- Verification: `python -m py_compile scripts\strategy_study.py scripts\research_harness.py scripts\test_research_harness.py`, `python scripts\test_research_harness.py`, and `cargo check` passed.
+
+### Research campaign 2026-04-26T13:02:29Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\research_run_20260426_150229.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT, AXSUSDT, BNBUSDT, XRPUSDT, RAYUSDT, ZECUSDT, TONUSDT, TRXUSDT, INJUSDT, ADAUSDT, SUIUSDT, AAVEUSDT, LINKUSDT, SANDUSDT, AVAXUSDT, ALGOUSDT, LTCUSDT, NEARUSDT`
+- Candidates tested: `18`
+- Universe filter: `profile=strict`, `min_quote_volume=5000000.0`
+- Top candidate: `v2_reclaim_overlap_only`
+- Top OOS: `trades=22`, `net_total_r=0.6812`, `net_avg_r=0.031`, `pf=1.098`
+- Top gate status: `fail`
+- Top gate failures: `executed_trades<80, net_avg_r<0.1, profit_factor<1.25, holdout_net_total_r<=0, holdout_net_avg_r<0.05, folds_positive<4, symbol_concentration>0.4`
+- Top gate failure counts: `net_avg_r<0.1=18, profit_factor<1.25=18, holdout_net_total_r<=0=18, holdout_net_avg_r<0.05=18, folds_positive<4=18`
+- Promoted strategies: `none`
+

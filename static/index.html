@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="sl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Trade Bot Starter</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Crypto market cockpit</p>
+          <h1>Live market radar in rocni paper trading</h1>
+          <p class="hero-copy">
+            Zacni brez racuna na borzi. Spremljaj javne market podatke, klikaj paper trade-e in si
+            pripravi okolje, iz katerega lahko pozneje zgradiva signal engine ali bota.
+          </p>
+        </div>
+        <div class="hero-stats" id="summaryCards"></div>
+      </header>
+
+      <main class="layout">
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="panel-kicker">Market</p>
+              <h2>Watchlist</h2>
+            </div>
+            <div class="status-row">
+              <span class="pill" id="marketStatus">Povezujem...</span>
+              <span class="timestamp" id="updatedAt"></span>
+            </div>
+          </div>
+          <div class="market-grid" id="marketCards"></div>
+        </section>
+
+        <section class="panel chart-panel">
+          <div class="panel-head">
+            <div>
+              <p class="panel-kicker">Price action</p>
+              <h2 id="chartTitle">BTCUSDT</h2>
+            </div>
+            <div class="interval-switch">
+              <button class="interval-button active" data-interval="1m">1m</button>
+              <button class="interval-button" data-interval="5m">5m</button>
+              <button class="interval-button" data-interval="15m">15m</button>
+              <button class="interval-button" data-interval="1h">1h</button>
+              <button class="interval-button" data-interval="4h">4h</button>
+            </div>
+          </div>
+          <div class="chart-meta" id="chartMeta"></div>
+          <canvas id="priceChart" width="960" height="320"></canvas>
+        </section>
+
+        <section class="panel signal-panel">
+          <div class="panel-head">
+            <div>
+              <p class="panel-kicker">Signal assistant</p>
+              <h2>4h trend, 1h setup, 15m trigger</h2>
+            </div>
+            <button class="ghost-button" id="prefillSignalTrade" type="button">Prefill trade</button>
+          </div>
+          <p class="signal-summary" id="signalSummary">
+            Signal assistant se nalaga ...
+          </p>
+          <div class="signal-cards" id="signalCards"></div>
+          <div class="signal-layout">
+            <div>
+              <h3 class="signal-subtitle">Checklist</h3>
+              <div class="signal-list" id="signalChecklist"></div>
+            </div>
+            <div>
+              <h3 class="signal-subtitle">Risk plan</h3>
+              <div class="signal-list" id="signalRiskPlan"></div>
+            </div>
+            <div>
+              <h3 class="signal-subtitle">Warnings</h3>
+              <div class="signal-list" id="signalWarnings"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel replay-panel">
+          <div class="panel-head">
+            <div>
+              <p class="panel-kicker">Replay</p>
+              <h2>Zgodovinski signal backtest</h2>
+            </div>
+            <div class="status-row">
+              <span class="timestamp" id="replayUpdatedAt"></span>
+              <button class="ghost-button" id="runReplay" type="button">Run replay</button>
+            </div>
+          </div>
+          <p class="signal-summary" id="replaySummary">
+            Replay se se ni zagnal.
+          </p>
+          <div class="signal-cards" id="replayCards"></div>
+          <div class="replay-layout">
+            <div>
+              <h3 class="signal-subtitle">Notes</h3>
+              <div class="signal-list" id="replayNotes"></div>
+            </div>
+            <div>
+              <h3 class="signal-subtitle">Recent replay trades</h3>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Opened</th>
+                      <th>Outcome</th>
+                      <th>R</th>
+                      <th>Held</th>
+                      <th>Entry</th>
+                      <th>Stop</th>
+                      <th>TP1</th>
+                      <th>TP2</th>
+                    </tr>
+                  </thead>
+                  <tbody id="replayTradesBody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel trade-panel">
+          <div class="panel-head">
+            <div>
+              <p class="panel-kicker">Paper execution</p>
+              <h2>Rocni trade</h2>
+            </div>
+            <button class="ghost-button" id="resetAccount" type="button">Reset account</button>
+          </div>
+
+          <form id="tradeForm" class="trade-form">
+            <label>
+              Symbol
+              <select id="tradeSymbol"></select>
+            </label>
+            <label>
+              Side
+              <select id="tradeSide">
+                <option value="buy">Buy</option>
+                <option value="sell">Sell</option>
+              </select>
+            </label>
+            <label>
+              Order type
+              <select id="tradeOrderKind">
+                <option value="market">Market</option>
+                <option value="limit">Limit</option>
+              </select>
+            </label>
+            <label>
+              Quantity
+              <input id="tradeQuantity" type="number" min="0.000001" step="0.000001" value="0.01" />
+            </label>
+            <label>
+              Limit price
+              <input id="tradeLimitPrice" type="number" min="0.000001" step="0.000001" placeholder="Only for limit" />
+            </label>
+            <label>
+              Stop-loss
+              <input id="tradeStopLoss" type="number" min="0.000001" step="0.000001" placeholder="Optional on buy" />
+            </label>
+            <label>
+              Take-profit
+              <input id="tradeTakeProfit" type="number" min="0.000001" step="0.000001" placeholder="Optional on buy" />
+            </label>
+            <label class="trade-form-wide">
+              Note
+              <textarea id="tradeNote" rows="2" placeholder="Setup idea, invalidation, confidence ..."></textarea>
+            </label>
+            <button type="submit" class="primary-button">Submit paper order</button>
+          </form>
+          <p class="form-note" id="tradeFeedback">
+            Market order se izvrsi takoj. Limit order ostane odprt, dokler ga cena ne doseze.
+          </p>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="panel-kicker">Portfolio</p>
+              <h2>Open paper pozicije</h2>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Qty</th>
+                  <th>Avg</th>
+                  <th>Last</th>
+                  <th>Stop</th>
+                  <th>Take</th>
+                  <th>Value</th>
+                  <th>Unrealized</th>
+                  <th>Note</th>
+                </tr>
+              </thead>
+              <tbody id="positionsBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="panel-kicker">Orders</p>
+              <h2>Open paper orderji</h2>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Type</th>
+                  <th>Side</th>
+                  <th>Symbol</th>
+                  <th>Qty</th>
+                  <th>Limit</th>
+                  <th>Stop</th>
+                  <th>Take</th>
+                  <th>Note</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="ordersBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="panel-kicker">Journal</p>
+              <h2>Trade log</h2>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Source</th>
+                  <th>Side</th>
+                  <th>Symbol</th>
+                  <th>Qty</th>
+                  <th>Price</th>
+                  <th>Fee</th>
+                  <th>Realized</th>
+                  <th>Note</th>
+                </tr>
+              </thead>
+              <tbody id="tradesBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>
