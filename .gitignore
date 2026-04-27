@@ -5,6 +5,7 @@ scripts/__pycache__/
 __pycache__/
 *.pyc
 tmp/research_cache/
+tmp/derivatives_cache/
 tmp/research_runs/
 tmp/pylibs/
 tmp/pdfs/

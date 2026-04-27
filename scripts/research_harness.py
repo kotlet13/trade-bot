@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import bisect
 import concurrent.futures
+import datetime
 import json
 import math
 import os
@@ -18,6 +19,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+import derivatives_data
 import strategy_study as study
 
 
@@ -154,6 +156,8 @@ class MarketData:
     trigger: list[study.Candle]
     setup: list[study.Candle]
     trend: list[study.Candle]
+    funding: list[derivatives_data.FundingRate] = field(default_factory=list)
+    metrics: list[derivatives_data.FuturesMetric] = field(default_factory=list)
     trigger_open_times: tuple[int, ...] = field(init=False, repr=False)
     setup_open_times: tuple[int, ...] = field(init=False, repr=False)
     trend_open_times: tuple[int, ...] = field(init=False, repr=False)
@@ -369,19 +373,77 @@ def fetch_cached_candles(
     return candles
 
 
+def load_cached_metrics_range(
+    cache_dir: Path,
+    symbol: str,
+    start_time: int,
+    end_time: int,
+) -> list[derivatives_data.FuturesMetric]:
+    rows: list[derivatives_data.FuturesMetric] = []
+    current_day = derivatives_data.day_from_ms(start_time)
+    end_day = derivatives_data.day_from_ms(end_time)
+    while current_day <= end_day:
+        path = derivatives_data.metrics_cache_path(cache_dir, symbol, current_day)
+        cached = derivatives_data.read_metrics_cache(path)
+        if cached is not None:
+            rows.extend(cached)
+        current_day += datetime.timedelta(days=1)
+    deduped = {row.timestamp: row for row in rows if start_time <= row.timestamp <= end_time}
+    return [deduped[key] for key in sorted(deduped)]
+
+
 def fetch_market_data(
     symbol: str,
     trigger_limit: int,
     cache_dir: Path,
     refresh_cache: bool,
+    derivatives_cache_dir: Path | None = None,
+    refresh_derivatives_cache: bool = False,
+    include_funding: bool = False,
+    include_metrics: bool = False,
+    metrics_cache_only: bool = True,
 ) -> MarketData:
     setup_limit = math.ceil(trigger_limit / 4) + 200
     trend_limit = math.ceil(trigger_limit / 16) + 200
+    trigger = fetch_cached_candles(cache_dir, symbol, "15m", trigger_limit, refresh_cache)
+    funding: list[derivatives_data.FundingRate] = []
+    metrics: list[derivatives_data.FuturesMetric] = []
+    if include_funding and trigger and derivatives_cache_dir is not None:
+        start_time = trigger[0].open_time
+        end_time = trigger[-1].open_time + study.interval_millis("15m")
+        try:
+            funding = derivatives_data.fetch_funding_rates(
+                symbol,
+                start_time,
+                end_time,
+                derivatives_cache_dir,
+                refresh_cache=refresh_derivatives_cache,
+            )
+        except Exception as exc:
+            print(f"[warn] {symbol} funding unavailable: {exc}", file=sys.stderr)
+    if include_metrics and trigger and derivatives_cache_dir is not None:
+        start_time = trigger[0].open_time
+        end_time = trigger[-1].open_time + study.interval_millis("15m")
+        try:
+            if metrics_cache_only:
+                metrics = load_cached_metrics_range(derivatives_cache_dir, symbol, start_time, end_time)
+            else:
+                metrics = derivatives_data.fetch_metrics(
+                    symbol,
+                    start_time,
+                    end_time,
+                    derivatives_cache_dir,
+                    refresh_cache=refresh_derivatives_cache,
+                )
+        except Exception as exc:
+            print(f"[warn] {symbol} metrics unavailable: {exc}", file=sys.stderr)
     return MarketData(
         symbol=symbol,
-        trigger=fetch_cached_candles(cache_dir, symbol, "15m", trigger_limit, refresh_cache),
+        trigger=trigger,
         setup=fetch_cached_candles(cache_dir, symbol, "1h", setup_limit, refresh_cache),
         trend=fetch_cached_candles(cache_dir, symbol, "4h", trend_limit, refresh_cache),
+        funding=funding,
+        metrics=metrics,
     )
 
 
@@ -512,6 +574,13 @@ def build_candidates() -> list[CandidateSpec]:
         trigger_body_ratio_min=0.60,
         trigger_close_location_min=0.75,
     )
+    moderate_1h = with_config(
+        base,
+        "v2_reclaim_moderate_1h",
+        allow_neutral_setup=False,
+        trigger_body_ratio_min=0.55,
+        trigger_close_location_min=0.70,
+    )
     tight = with_config(
         strict_1h,
         "v2_reclaim_tight",
@@ -533,6 +602,24 @@ def build_candidates() -> list[CandidateSpec]:
         trigger_close_location_min=0.65,
         require_close_above_previous_high=False,
     )
+    coverage_time16 = {
+        "max_bars": 16,
+        "min_stop_pct": 0.004,
+        "max_fee_drag_r": 0.45,
+        "exclude_btc": True,
+    }
+    coverage_time8 = {
+        "max_bars": 8,
+        "min_stop_pct": 0.004,
+        "max_fee_drag_r": 0.45,
+        "exclude_btc": True,
+    }
+    coverage_short8 = {
+        "max_bars": 8,
+        "min_stop_pct": 0.004,
+        "max_fee_drag_r": 0.45,
+        "exclude_btc": True,
+    }
 
     return [
         CandidateSpec("v2_reclaim", "v2_reclaim", "v2_reclaim", base),
@@ -606,11 +693,1464 @@ def build_candidates() -> list[CandidateSpec]:
             strict_1h,
             regime_filter="overlap_session",
         ),
+        CandidateSpec(
+            "v2_reclaim_overlap_fee_ok",
+            "focused_overlap",
+            "v2_reclaim",
+            strict_1h,
+            regime_filter="overlap_session",
+            params={"min_stop_pct": 0.006, "max_fee_drag_r": 0.35},
+        ),
+        CandidateSpec(
+            "v2_reclaim_overlap_wide_fee_ok",
+            "focused_overlap",
+            "v2_reclaim",
+            strict_1h,
+            regime_filter="overlap_session",
+            params={"min_stop_pct": 0.008, "max_fee_drag_r": 0.28},
+        ),
+        CandidateSpec(
+            "v2_reclaim_overlap_volume_70",
+            "focused_overlap",
+            "v2_reclaim",
+            strict_1h,
+            regime_filter="overlap_session",
+            params={"min_volume_percentile": 0.70},
+        ),
+        CandidateSpec(
+            "v2_reclaim_overlap_volume_fee_ok",
+            "focused_overlap",
+            "v2_reclaim",
+            strict_1h,
+            regime_filter="overlap_session",
+            params={"min_volume_percentile": 0.70, "min_stop_pct": 0.006, "max_fee_drag_r": 0.35},
+        ),
+        CandidateSpec(
+            "v2_reclaim_overlap_atr_expansion",
+            "focused_overlap",
+            "v2_reclaim",
+            strict_1h,
+            regime_filter="overlap_session",
+            params={"min_atr_expansion_multiple": 1.10},
+        ),
+        CandidateSpec(
+            "v2_reclaim_overlap_btc_bullish",
+            "focused_overlap",
+            "v2_reclaim",
+            strict_1h,
+            regime_filter="overlap_session",
+            params={"require_btc_bullish": True},
+        ),
+        CandidateSpec(
+            "v2_reclaim_overlap_btc_volume_fee_ok",
+            "focused_overlap",
+            "v2_reclaim",
+            strict_1h,
+            regime_filter="overlap_session",
+            params={
+                "require_btc_bullish": True,
+                "min_volume_percentile": 0.70,
+                "min_stop_pct": 0.006,
+                "max_fee_drag_r": 0.35,
+            },
+        ),
+        CandidateSpec(
+            "v2_reclaim_overlap_time_stop_fee_ok",
+            "focused_overlap",
+            "v2_reclaim",
+            strict_1h,
+            exit_style="time_stop",
+            regime_filter="overlap_session",
+            params={"max_bars": 16, "min_stop_pct": 0.006, "max_fee_drag_r": 0.35},
+        ),
+        CandidateSpec(
+            "v2_reclaim_overlap_time_stop_no_btc",
+            "focused_widening",
+            "v2_reclaim",
+            strict_1h,
+            exit_style="time_stop",
+            regime_filter="overlap_session",
+            params={"max_bars": 16, "min_stop_pct": 0.006, "max_fee_drag_r": 0.35, "exclude_btc": True},
+        ),
+        CandidateSpec(
+            "v2_reclaim_overlap_time_stop_atr_ok",
+            "focused_widening",
+            "v2_reclaim",
+            strict_1h,
+            exit_style="time_stop",
+            regime_filter="overlap_session",
+            params={"max_bars": 16, "min_stop_pct": 0.006, "max_fee_drag_r": 0.35, "min_atr_expansion_multiple": 0.90},
+        ),
+        CandidateSpec(
+            "v2_reclaim_overlap_time_stop_atr_ok_no_btc",
+            "focused_widening",
+            "v2_reclaim",
+            strict_1h,
+            exit_style="time_stop",
+            regime_filter="overlap_session",
+            params={
+                "max_bars": 16,
+                "min_stop_pct": 0.006,
+                "max_fee_drag_r": 0.35,
+                "min_atr_expansion_multiple": 0.90,
+                "exclude_btc": True,
+            },
+        ),
+        CandidateSpec(
+            "v2_reclaim_overlap_time_stop_atr_exp_no_btc",
+            "focused_widening",
+            "v2_reclaim",
+            strict_1h,
+            exit_style="time_stop",
+            regime_filter="overlap_session",
+            params={
+                "max_bars": 16,
+                "min_stop_pct": 0.006,
+                "max_fee_drag_r": 0.35,
+                "min_atr_expansion_multiple": 1.10,
+                "exclude_btc": True,
+            },
+        ),
+        CandidateSpec(
+            "v2_reclaim_overlap_ny_time_stop_no_btc",
+            "focused_widening",
+            "v2_reclaim",
+            strict_1h,
+            exit_style="time_stop",
+            regime_filter="overlap_or_new_york",
+            params={"max_bars": 16, "min_stop_pct": 0.006, "max_fee_drag_r": 0.35, "exclude_btc": True},
+        ),
+        CandidateSpec(
+            "v2_reclaim_overlap_ny_time_stop_atr_ok_no_btc",
+            "focused_widening",
+            "v2_reclaim",
+            strict_1h,
+            exit_style="time_stop",
+            regime_filter="overlap_or_new_york",
+            params={
+                "max_bars": 16,
+                "min_stop_pct": 0.006,
+                "max_fee_drag_r": 0.35,
+                "min_atr_expansion_multiple": 0.90,
+                "exclude_btc": True,
+            },
+        ),
+        CandidateSpec(
+            "v2_reclaim_overlap_ny_time_stop_loose_fee_no_btc",
+            "focused_widening",
+            "v2_reclaim",
+            strict_1h,
+            exit_style="time_stop",
+            regime_filter="overlap_or_new_york",
+            params={"max_bars": 16, "min_stop_pct": 0.004, "max_fee_drag_r": 0.45, "exclude_btc": True},
+        ),
+        CandidateSpec(
+            "v2_reclaim_overlap_ny_time_stop_volume_no_btc",
+            "focused_widening",
+            "v2_reclaim",
+            strict_1h,
+            exit_style="time_stop",
+            regime_filter="overlap_or_new_york",
+            params={
+                "max_bars": 16,
+                "min_stop_pct": 0.006,
+                "max_fee_drag_r": 0.35,
+                "min_volume_percentile": 0.70,
+                "exclude_btc": True,
+            },
+        ),
+        CandidateSpec(
+            "v2_reclaim_active_time_stop_loose_fee_no_btc",
+            "focused_scale",
+            "v2_reclaim",
+            strict_1h,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            params={"max_bars": 16, "min_stop_pct": 0.004, "max_fee_drag_r": 0.45, "exclude_btc": True},
+        ),
+        CandidateSpec(
+            "v2_reclaim_active_time_stop_atr_ok_no_btc",
+            "focused_scale",
+            "v2_reclaim",
+            strict_1h,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            params={
+                "max_bars": 16,
+                "min_stop_pct": 0.006,
+                "max_fee_drag_r": 0.35,
+                "min_atr_expansion_multiple": 0.90,
+                "exclude_btc": True,
+            },
+        ),
+        CandidateSpec(
+            "v2_reclaim_overlap_ny_time_stop_moderate_no_btc",
+            "focused_scale",
+            "v2_reclaim",
+            moderate_1h,
+            exit_style="time_stop",
+            regime_filter="overlap_or_new_york",
+            params={"max_bars": 16, "min_stop_pct": 0.004, "max_fee_drag_r": 0.45, "exclude_btc": True},
+        ),
+        CandidateSpec(
+            "v2_reclaim_active_time_stop_moderate_no_btc",
+            "focused_scale",
+            "v2_reclaim",
+            moderate_1h,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            params={"max_bars": 16, "min_stop_pct": 0.004, "max_fee_drag_r": 0.45, "exclude_btc": True},
+        ),
+        CandidateSpec(
+            "v2_reclaim_overlap_ny_time_stop_base_no_btc",
+            "focused_scale",
+            "v2_reclaim",
+            base,
+            exit_style="time_stop",
+            regime_filter="overlap_or_new_york",
+            params={"max_bars": 16, "min_stop_pct": 0.004, "max_fee_drag_r": 0.45, "exclude_btc": True},
+        ),
+        CandidateSpec(
+            "v2_reclaim_active_time_stop_base_no_btc",
+            "focused_scale",
+            "v2_reclaim",
+            base,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            params={"max_bars": 16, "min_stop_pct": 0.004, "max_fee_drag_r": 0.45, "exclude_btc": True},
+        ),
+        CandidateSpec(
+            "v2_reclaim_overlap_ny_time_stop_no_corr_no_btc",
+            "focused_scale",
+            "v2_reclaim",
+            strict_1h,
+            exit_style="time_stop",
+            regime_filter="overlap_or_new_york",
+            use_correlation_filter=False,
+            params={"max_bars": 16, "min_stop_pct": 0.004, "max_fee_drag_r": 0.45, "exclude_btc": True},
+        ),
+        CandidateSpec(
+            "v2_reclaim_active_time_stop_no_corr_no_btc",
+            "focused_scale",
+            "v2_reclaim",
+            strict_1h,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={"max_bars": 16, "min_stop_pct": 0.004, "max_fee_drag_r": 0.45, "exclude_btc": True},
+        ),
+        CandidateSpec(
+            "v2_reclaim_active_no_corr_vol_lt90",
+            "focused_refinement",
+            "v2_reclaim",
+            strict_1h,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={
+                "max_bars": 16,
+                "min_stop_pct": 0.004,
+                "max_fee_drag_r": 0.45,
+                "exclude_btc": True,
+                "max_volume_percentile": 0.90,
+            },
+        ),
+        CandidateSpec(
+            "v2_reclaim_active_no_corr_vol_50_90",
+            "focused_refinement",
+            "v2_reclaim",
+            strict_1h,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={
+                "max_bars": 16,
+                "min_stop_pct": 0.004,
+                "max_fee_drag_r": 0.45,
+                "exclude_btc": True,
+                "min_volume_percentile": 0.50,
+                "max_volume_percentile": 0.90,
+            },
+        ),
+        CandidateSpec(
+            "v2_reclaim_active_no_corr_vol_50_85",
+            "focused_refinement",
+            "v2_reclaim",
+            strict_1h,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={
+                "max_bars": 16,
+                "min_stop_pct": 0.004,
+                "max_fee_drag_r": 0.45,
+                "exclude_btc": True,
+                "min_volume_percentile": 0.50,
+                "max_volume_percentile": 0.85,
+            },
+        ),
+        CandidateSpec(
+            "v2_reclaim_active_no_corr_ex_worst4",
+            "focused_refinement",
+            "v2_reclaim",
+            strict_1h,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={
+                "max_bars": 16,
+                "min_stop_pct": 0.004,
+                "max_fee_drag_r": 0.45,
+                "exclude_btc": True,
+                "excluded_symbols": "APTUSDT,AVAXUSDT,ADAUSDT,LDOUSDT",
+            },
+        ),
+        CandidateSpec(
+            "v2_reclaim_active_no_corr_ex_worst6",
+            "focused_refinement",
+            "v2_reclaim",
+            strict_1h,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={
+                "max_bars": 16,
+                "min_stop_pct": 0.004,
+                "max_fee_drag_r": 0.45,
+                "exclude_btc": True,
+                "excluded_symbols": "APTUSDT,AVAXUSDT,ADAUSDT,LDOUSDT,AAVEUSDT,LINKUSDT",
+            },
+        ),
+        CandidateSpec(
+            "v2_reclaim_active_no_corr_vol_lt90_ex_worst4",
+            "focused_refinement",
+            "v2_reclaim",
+            strict_1h,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={
+                "max_bars": 16,
+                "min_stop_pct": 0.004,
+                "max_fee_drag_r": 0.45,
+                "exclude_btc": True,
+                "max_volume_percentile": 0.90,
+                "excluded_symbols": "APTUSDT,AVAXUSDT,ADAUSDT,LDOUSDT",
+            },
+        ),
+        CandidateSpec(
+            "v2_reclaim_active_no_corr_atr_lt110",
+            "focused_refinement",
+            "v2_reclaim",
+            strict_1h,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={
+                "max_bars": 16,
+                "min_stop_pct": 0.004,
+                "max_fee_drag_r": 0.45,
+                "exclude_btc": True,
+                "max_atr_expansion_multiple": 1.10,
+            },
+        ),
+        CandidateSpec(
+            "v2_reclaim_active_corr_vol_lt90",
+            "focused_refinement",
+            "v2_reclaim",
+            strict_1h,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            params={
+                "max_bars": 16,
+                "min_stop_pct": 0.004,
+                "max_fee_drag_r": 0.45,
+                "exclude_btc": True,
+                "max_volume_percentile": 0.90,
+            },
+        ),
+        CandidateSpec(
+            "v2_reclaim_active_no_corr_funding_mild_neg",
+            "derivatives_filter",
+            "v2_reclaim",
+            strict_1h,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={
+                "max_bars": 16,
+                "min_stop_pct": 0.004,
+                "max_fee_drag_r": 0.45,
+                "exclude_btc": True,
+                "min_funding_bps": -0.9999,
+                "max_funding_bps": -0.0001,
+                "max_funding_age_hours": 12,
+            },
+        ),
+        CandidateSpec(
+            "v2_reclaim_active_no_corr_funding_not_panic",
+            "derivatives_filter",
+            "v2_reclaim",
+            strict_1h,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={
+                "max_bars": 16,
+                "min_stop_pct": 0.004,
+                "max_fee_drag_r": 0.45,
+                "exclude_btc": True,
+                "min_funding_bps": -0.9999,
+                "max_funding_age_hours": 12,
+            },
+        ),
+        CandidateSpec(
+            "v2_reclaim_active_no_corr_funding_abs_lt1",
+            "derivatives_filter",
+            "v2_reclaim",
+            strict_1h,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={
+                "max_bars": 16,
+                "min_stop_pct": 0.004,
+                "max_fee_drag_r": 0.45,
+                "exclude_btc": True,
+                "max_abs_funding_bps": 1.0,
+                "max_funding_age_hours": 12,
+            },
+        ),
+        CandidateSpec(
+            "v2_reclaim_active_no_corr_funding_neg_to_pos1",
+            "derivatives_filter",
+            "v2_reclaim",
+            strict_1h,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={
+                "max_bars": 16,
+                "min_stop_pct": 0.004,
+                "max_fee_drag_r": 0.45,
+                "exclude_btc": True,
+                "min_funding_bps": -0.9999,
+                "max_funding_bps": 1.0,
+                "max_funding_age_hours": 12,
+            },
+        ),
+        CandidateSpec(
+            "v2_reclaim_active_moderate_funding_not_panic",
+            "derivatives_filter",
+            "v2_reclaim",
+            moderate_1h,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={
+                "max_bars": 16,
+                "min_stop_pct": 0.004,
+                "max_fee_drag_r": 0.45,
+                "exclude_btc": True,
+                "min_funding_bps": -0.9999,
+                "max_funding_age_hours": 12,
+            },
+        ),
+        CandidateSpec(
+            "v2_reclaim_overlap_ny_no_corr_funding_not_panic",
+            "derivatives_filter",
+            "v2_reclaim",
+            strict_1h,
+            exit_style="time_stop",
+            regime_filter="overlap_or_new_york",
+            use_correlation_filter=False,
+            params={
+                "max_bars": 16,
+                "min_stop_pct": 0.004,
+                "max_fee_drag_r": 0.45,
+                "exclude_btc": True,
+                "min_funding_bps": -0.9999,
+                "max_funding_age_hours": 12,
+            },
+        ),
+        CandidateSpec(
+            "v2_reclaim_active_base_taker_buy",
+            "metrics_filter",
+            "v2_reclaim",
+            base,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={
+                "max_bars": 16,
+                "min_stop_pct": 0.004,
+                "max_fee_drag_r": 0.45,
+                "exclude_btc": True,
+                "min_taker_buy_sell_ratio": 1.25,
+                "max_metrics_age_minutes": 20,
+            },
+        ),
+        CandidateSpec(
+            "v2_reclaim_active_base_funding_taker_buy",
+            "metrics_filter",
+            "v2_reclaim",
+            base,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={
+                "max_bars": 16,
+                "min_stop_pct": 0.004,
+                "max_fee_drag_r": 0.45,
+                "exclude_btc": True,
+                "min_funding_bps": -0.9999,
+                "max_funding_age_hours": 12,
+                "min_taker_buy_sell_ratio": 1.25,
+                "max_metrics_age_minutes": 20,
+            },
+        ),
+        CandidateSpec(
+            "v2_reclaim_active_base_taker_global_lte120",
+            "metrics_filter",
+            "v2_reclaim",
+            base,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={
+                "max_bars": 16,
+                "min_stop_pct": 0.004,
+                "max_fee_drag_r": 0.45,
+                "exclude_btc": True,
+                "min_taker_buy_sell_ratio": 1.25,
+                "max_global_account_long_short_ratio": 1.20,
+                "max_metrics_age_minutes": 20,
+            },
+        ),
+        CandidateSpec(
+            "v2_reclaim_overlap_base_funding_taker_buy",
+            "metrics_filter",
+            "v2_reclaim",
+            base,
+            exit_style="time_stop",
+            regime_filter="overlap_session",
+            use_correlation_filter=False,
+            params={
+                "max_bars": 16,
+                "min_stop_pct": 0.004,
+                "max_fee_drag_r": 0.45,
+                "exclude_btc": True,
+                "min_funding_bps": -0.9999,
+                "max_funding_age_hours": 12,
+                "min_taker_buy_sell_ratio": 1.25,
+                "max_metrics_age_minutes": 20,
+            },
+        ),
+        CandidateSpec(
+            "v2_reclaim_overlap_strict_funding_taker_buy",
+            "metrics_filter",
+            "v2_reclaim",
+            strict_1h,
+            exit_style="time_stop",
+            regime_filter="overlap_session",
+            use_correlation_filter=False,
+            params={
+                "max_bars": 16,
+                "min_stop_pct": 0.004,
+                "max_fee_drag_r": 0.45,
+                "exclude_btc": True,
+                "min_funding_bps": -0.9999,
+                "max_funding_age_hours": 12,
+                "min_taker_buy_sell_ratio": 1.25,
+                "max_metrics_age_minutes": 20,
+            },
+        ),
+        CandidateSpec(
+            "v2_reclaim_active_strict_funding_taker_buy",
+            "metrics_filter",
+            "v2_reclaim",
+            strict_1h,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={
+                "max_bars": 16,
+                "min_stop_pct": 0.004,
+                "max_fee_drag_r": 0.45,
+                "exclude_btc": True,
+                "min_funding_bps": -0.9999,
+                "max_funding_age_hours": 12,
+                "min_taker_buy_sell_ratio": 1.25,
+                "max_metrics_age_minutes": 20,
+            },
+        ),
+        CandidateSpec(
+            "ema_pullback_london_overlap_funding_taker",
+            "broad_derivatives_entry",
+            "ema_pullback",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="london_or_overlap",
+            use_correlation_filter=False,
+            params={
+                "max_bars": 16,
+                "min_stop_pct": 0.004,
+                "max_fee_drag_r": 0.45,
+                "exclude_btc": True,
+                "min_funding_bps": -0.9999,
+                "max_funding_age_hours": 12,
+                "min_taker_buy_sell_ratio": 1.25,
+                "max_metrics_age_minutes": 20,
+            },
+        ),
+        CandidateSpec(
+            "htf_continuation_london_overlap_funding_taker",
+            "broad_derivatives_entry",
+            "htf_trend_continuation",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="london_or_overlap",
+            use_correlation_filter=False,
+            params={
+                "max_bars": 16,
+                "min_stop_pct": 0.004,
+                "max_fee_drag_r": 0.45,
+                "exclude_btc": True,
+                "min_funding_bps": -0.9999,
+                "max_funding_age_hours": 12,
+                "min_taker_buy_sell_ratio": 1.25,
+                "max_metrics_age_minutes": 20,
+            },
+        ),
+        CandidateSpec(
+            "donchian_breakout_48_london_overlap_funding_taker",
+            "broad_derivatives_entry",
+            "donchian_breakout",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="london_or_overlap",
+            use_correlation_filter=False,
+            params={
+                "max_bars": 16,
+                "lookback": 48,
+                "min_stop_pct": 0.004,
+                "max_fee_drag_r": 0.45,
+                "exclude_btc": True,
+                "min_funding_bps": -0.9999,
+                "max_funding_age_hours": 12,
+                "min_taker_buy_sell_ratio": 1.25,
+                "max_metrics_age_minutes": 20,
+            },
+        ),
+        CandidateSpec(
+            "breakout_pullback_london_overlap_funding_taker",
+            "broad_derivatives_entry",
+            "breakout_pullback",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="london_or_overlap",
+            use_correlation_filter=False,
+            params={
+                "max_bars": 16,
+                "lookback": 48,
+                "pullback_bars": 16,
+                "level_buffer_atr": 0.35,
+                "min_stop_pct": 0.004,
+                "max_fee_drag_r": 0.45,
+                "exclude_btc": True,
+                "min_funding_bps": -0.9999,
+                "max_funding_age_hours": 12,
+                "min_taker_buy_sell_ratio": 1.25,
+                "max_metrics_age_minutes": 20,
+            },
+        ),
+        CandidateSpec(
+            "opening_session_breakout_london_overlap_funding_taker",
+            "broad_derivatives_entry",
+            "opening_session_breakout",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="london_or_overlap",
+            use_correlation_filter=False,
+            params={
+                "max_bars": 16,
+                "min_stop_pct": 0.004,
+                "max_fee_drag_r": 0.45,
+                "exclude_btc": True,
+                "min_funding_bps": -0.9999,
+                "max_funding_age_hours": 12,
+                "min_taker_buy_sell_ratio": 1.25,
+                "max_metrics_age_minutes": 20,
+            },
+        ),
+        CandidateSpec(
+            "htf_continuation_london_funding_taker",
+            "broad_derivatives_refined",
+            "htf_trend_continuation",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="london_session",
+            use_correlation_filter=False,
+            params={
+                "max_bars": 16,
+                "min_stop_pct": 0.004,
+                "max_fee_drag_r": 0.45,
+                "exclude_btc": True,
+                "min_funding_bps": -0.9999,
+                "max_funding_age_hours": 12,
+                "min_taker_buy_sell_ratio": 1.25,
+                "max_metrics_age_minutes": 20,
+            },
+        ),
+        CandidateSpec(
+            "htf_continuation_london_funding_taker_global_lte120",
+            "broad_derivatives_refined",
+            "htf_trend_continuation",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="london_session",
+            use_correlation_filter=False,
+            params={
+                "max_bars": 16,
+                "min_stop_pct": 0.004,
+                "max_fee_drag_r": 0.45,
+                "exclude_btc": True,
+                "min_funding_bps": -0.9999,
+                "max_funding_age_hours": 12,
+                "min_taker_buy_sell_ratio": 1.25,
+                "max_global_account_long_short_ratio": 1.20,
+                "max_metrics_age_minutes": 20,
+            },
+        ),
+        CandidateSpec(
+            "htf_continuation_london_funding_taker_oi_cooling",
+            "broad_derivatives_refined",
+            "htf_trend_continuation",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="london_session",
+            use_correlation_filter=False,
+            params={
+                "max_bars": 16,
+                "min_stop_pct": 0.004,
+                "max_fee_drag_r": 0.45,
+                "exclude_btc": True,
+                "min_funding_bps": -0.9999,
+                "max_funding_age_hours": 12,
+                "min_taker_buy_sell_ratio": 1.25,
+                "min_metrics_oi_24h_change_pct": -10.0,
+                "max_metrics_oi_24h_change_pct": 0.0,
+                "max_metrics_age_minutes": 20,
+            },
+        ),
+        CandidateSpec(
+            "htf_continuation_london_funding_taker_oi_cooling_global_lte120",
+            "broad_derivatives_refined",
+            "htf_trend_continuation",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="london_session",
+            use_correlation_filter=False,
+            params={
+                "max_bars": 16,
+                "min_stop_pct": 0.004,
+                "max_fee_drag_r": 0.45,
+                "exclude_btc": True,
+                "min_funding_bps": -0.9999,
+                "max_funding_age_hours": 12,
+                "min_taker_buy_sell_ratio": 1.25,
+                "max_global_account_long_short_ratio": 1.20,
+                "min_metrics_oi_24h_change_pct": -10.0,
+                "max_metrics_oi_24h_change_pct": 0.0,
+                "max_metrics_age_minutes": 20,
+            },
+        ),
+        CandidateSpec(
+            "v2_reclaim_london_base_funding_taker_oi_cooling",
+            "broad_derivatives_refined",
+            "v2_reclaim",
+            base,
+            exit_style="time_stop",
+            regime_filter="london_session",
+            use_correlation_filter=False,
+            params={
+                "max_bars": 16,
+                "min_stop_pct": 0.004,
+                "max_fee_drag_r": 0.45,
+                "exclude_btc": True,
+                "min_funding_bps": -0.9999,
+                "max_funding_age_hours": 12,
+                "min_taker_buy_sell_ratio": 1.25,
+                "min_metrics_oi_24h_change_pct": -10.0,
+                "max_metrics_oi_24h_change_pct": 0.0,
+                "max_metrics_age_minutes": 20,
+            },
+        ),
+        CandidateSpec(
+            "v2_reclaim_london_strict_funding_taker_oi_cooling",
+            "broad_derivatives_refined",
+            "v2_reclaim",
+            strict_1h,
+            exit_style="time_stop",
+            regime_filter="london_session",
+            use_correlation_filter=False,
+            params={
+                "max_bars": 16,
+                "min_stop_pct": 0.004,
+                "max_fee_drag_r": 0.45,
+                "exclude_btc": True,
+                "min_funding_bps": -0.9999,
+                "max_funding_age_hours": 12,
+                "min_taker_buy_sell_ratio": 1.25,
+                "min_metrics_oi_24h_change_pct": -10.0,
+                "max_metrics_oi_24h_change_pct": 0.0,
+                "max_metrics_age_minutes": 20,
+            },
+        ),
+        CandidateSpec(
+            "htf_london_funding_taker_oi_max0",
+            "broad_derivatives_oi_sweep",
+            "htf_trend_continuation",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="london_session",
+            use_correlation_filter=False,
+            params={
+                "max_bars": 16,
+                "min_stop_pct": 0.004,
+                "max_fee_drag_r": 0.45,
+                "exclude_btc": True,
+                "min_funding_bps": -0.9999,
+                "max_funding_age_hours": 12,
+                "min_taker_buy_sell_ratio": 1.25,
+                "max_metrics_oi_24h_change_pct": 0.0,
+                "max_metrics_age_minutes": 20,
+            },
+        ),
+        CandidateSpec(
+            "htf_london_funding_taker_oi_neg15_0",
+            "broad_derivatives_oi_sweep",
+            "htf_trend_continuation",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="london_session",
+            use_correlation_filter=False,
+            params={
+                "max_bars": 16,
+                "min_stop_pct": 0.004,
+                "max_fee_drag_r": 0.45,
+                "exclude_btc": True,
+                "min_funding_bps": -0.9999,
+                "max_funding_age_hours": 12,
+                "min_taker_buy_sell_ratio": 1.25,
+                "min_metrics_oi_24h_change_pct": -15.0,
+                "max_metrics_oi_24h_change_pct": 0.0,
+                "max_metrics_age_minutes": 20,
+            },
+        ),
+        CandidateSpec(
+            "htf_london_funding_taker_oi_neg10_pos1",
+            "broad_derivatives_oi_sweep",
+            "htf_trend_continuation",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="london_session",
+            use_correlation_filter=False,
+            params={
+                "max_bars": 16,
+                "min_stop_pct": 0.004,
+                "max_fee_drag_r": 0.45,
+                "exclude_btc": True,
+                "min_funding_bps": -0.9999,
+                "max_funding_age_hours": 12,
+                "min_taker_buy_sell_ratio": 1.25,
+                "min_metrics_oi_24h_change_pct": -10.0,
+                "max_metrics_oi_24h_change_pct": 1.0,
+                "max_metrics_age_minutes": 20,
+            },
+        ),
+        CandidateSpec(
+            "htf_london_funding_taker_oi_neg10_0_maxbars12",
+            "broad_derivatives_oi_sweep",
+            "htf_trend_continuation",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="london_session",
+            use_correlation_filter=False,
+            params={
+                "max_bars": 12,
+                "min_stop_pct": 0.004,
+                "max_fee_drag_r": 0.45,
+                "exclude_btc": True,
+                "min_funding_bps": -0.9999,
+                "max_funding_age_hours": 12,
+                "min_taker_buy_sell_ratio": 1.25,
+                "min_metrics_oi_24h_change_pct": -10.0,
+                "max_metrics_oi_24h_change_pct": 0.0,
+                "max_metrics_age_minutes": 20,
+            },
+        ),
+        CandidateSpec(
+            "htf_london_funding_taker_oi_neg10_0_maxbars8",
+            "broad_derivatives_oi_sweep",
+            "htf_trend_continuation",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="london_session",
+            use_correlation_filter=False,
+            params={
+                "max_bars": 8,
+                "min_stop_pct": 0.004,
+                "max_fee_drag_r": 0.45,
+                "exclude_btc": True,
+                "min_funding_bps": -0.9999,
+                "max_funding_age_hours": 12,
+                "min_taker_buy_sell_ratio": 1.25,
+                "min_metrics_oi_24h_change_pct": -10.0,
+                "max_metrics_oi_24h_change_pct": 0.0,
+                "max_metrics_age_minutes": 20,
+            },
+        ),
+        CandidateSpec(
+            "coverage_v2_base_active_time16",
+            "coverage_scan",
+            "v2_reclaim",
+            base,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={**coverage_time16},
+        ),
+        CandidateSpec(
+            "coverage_v2_moderate_active_time16",
+            "coverage_scan",
+            "v2_reclaim",
+            moderate_1h,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={**coverage_time16},
+        ),
+        CandidateSpec(
+            "coverage_v2_loose_active_time16",
+            "coverage_scan",
+            "v2_reclaim",
+            loose,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={**coverage_time16},
+        ),
+        CandidateSpec(
+            "coverage_htf_active_time16",
+            "coverage_scan",
+            "htf_trend_continuation",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={**coverage_time16},
+        ),
+        CandidateSpec(
+            "coverage_htf_active_time8",
+            "coverage_scan",
+            "htf_trend_continuation",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={**coverage_time8},
+        ),
+        CandidateSpec(
+            "coverage_ema_active_time16",
+            "coverage_scan",
+            "ema_pullback",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={**coverage_time16},
+        ),
+        CandidateSpec(
+            "coverage_donchian48_active_time16",
+            "coverage_scan",
+            "donchian_breakout",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={**coverage_time16, "lookback": 48},
+        ),
+        CandidateSpec(
+            "coverage_donchian80_active_time16",
+            "coverage_scan",
+            "donchian_breakout",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={**coverage_time16, "lookback": 80},
+        ),
+        CandidateSpec(
+            "coverage_breakout_pullback48_active_time16",
+            "coverage_scan",
+            "breakout_pullback",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={**coverage_time16, "lookback": 48, "pullback_bars": 16, "level_buffer_atr": 0.35},
+        ),
+        CandidateSpec(
+            "coverage_opening_breakout_active_time16",
+            "coverage_scan",
+            "opening_session_breakout",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={**coverage_time16},
+        ),
+        CandidateSpec(
+            "coverage_session_trap_long_active",
+            "coverage_scan",
+            "session_trap_long",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={**coverage_time16, "max_bars": 12, "range_minutes": 60, "trade_window_hours": 5},
+        ),
+        CandidateSpec(
+            "coverage_session_trap_short_active",
+            "coverage_scan",
+            "session_trap_short",
+            benchmark,
+            exit_style="short_time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={**coverage_short8, "max_bars": 12, "range_minutes": 60, "trade_window_hours": 5},
+        ),
+        CandidateSpec(
+            "coverage_crash_rebound_loose_active",
+            "coverage_scan",
+            "crash_rebound",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={
+                **coverage_time8,
+                "min_flush_atr": 1.75,
+                "min_close_location": 0.50,
+                "stop_atr_mult": 0.80,
+            },
+        ),
+        CandidateSpec(
+            "coverage_exhaustion_short_loose_active",
+            "coverage_scan",
+            "exhaustion_short",
+            benchmark,
+            exit_style="short_time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={
+                **coverage_short8,
+                "min_push_atr": 1.75,
+                "min_close_location": 0.75,
+                "stop_atr_mult": 0.80,
+            },
+        ),
+        CandidateSpec(
+            "coverage_v2_moderate_london_overlap_time16",
+            "coverage_refinement",
+            "v2_reclaim",
+            moderate_1h,
+            exit_style="time_stop",
+            regime_filter="london_or_overlap",
+            use_correlation_filter=False,
+            params={**coverage_time16},
+        ),
+        CandidateSpec(
+            "coverage_v2_moderate_overlap_time16",
+            "coverage_refinement",
+            "v2_reclaim",
+            moderate_1h,
+            exit_style="time_stop",
+            regime_filter="overlap_session",
+            use_correlation_filter=False,
+            params={**coverage_time16},
+        ),
+        CandidateSpec(
+            "coverage_v2_moderate_active_10_16_time16",
+            "coverage_refinement",
+            "v2_reclaim",
+            moderate_1h,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={**coverage_time16, "min_hour_utc": 10, "max_hour_utc": 16},
+        ),
+        CandidateSpec(
+            "coverage_v2_moderate_london_overlap_funding_m2_p1",
+            "coverage_refinement",
+            "v2_reclaim",
+            moderate_1h,
+            exit_style="time_stop",
+            regime_filter="london_or_overlap",
+            use_correlation_filter=False,
+            params={
+                **coverage_time16,
+                "min_funding_bps": -2.0,
+                "max_funding_bps": 1.0,
+                "max_funding_age_hours": 12,
+            },
+        ),
+        CandidateSpec(
+            "coverage_v2_moderate_10_16_funding_m2_p1",
+            "coverage_refinement",
+            "v2_reclaim",
+            moderate_1h,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={
+                **coverage_time16,
+                "min_hour_utc": 10,
+                "max_hour_utc": 16,
+                "min_funding_bps": -2.0,
+                "max_funding_bps": 1.0,
+                "max_funding_age_hours": 12,
+            },
+        ),
+        CandidateSpec(
+            "coverage_short_htf_active_time16",
+            "coverage_short_trend",
+            "htf_trend_continuation_short",
+            benchmark,
+            exit_style="short_time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={**coverage_short8, "max_bars": 16},
+        ),
+        CandidateSpec(
+            "coverage_short_htf_active_time8",
+            "coverage_short_trend",
+            "htf_trend_continuation_short",
+            benchmark,
+            exit_style="short_time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={**coverage_short8},
+        ),
+        CandidateSpec(
+            "coverage_short_donchian48_active_time16",
+            "coverage_short_trend",
+            "donchian_breakdown",
+            benchmark,
+            exit_style="short_time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={**coverage_short8, "max_bars": 16, "lookback": 48},
+        ),
+        CandidateSpec(
+            "coverage_short_donchian80_active_time16",
+            "coverage_short_trend",
+            "donchian_breakdown",
+            benchmark,
+            exit_style="short_time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={**coverage_short8, "max_bars": 16, "lookback": 80},
+        ),
+        CandidateSpec(
+            "coverage_short_ema_active_time16",
+            "coverage_short_trend",
+            "ema_pullback_short",
+            benchmark,
+            exit_style="short_time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={**coverage_short8, "max_bars": 16},
+        ),
+        CandidateSpec(
+            "fold2_short_donchian80_ny_btc_down",
+            "fold2_risk_off_short",
+            "donchian_breakdown",
+            benchmark,
+            exit_style="short_time_stop",
+            regime_filter="new_york_session",
+            use_correlation_filter=False,
+            params={
+                **coverage_short8,
+                "lookback": 80,
+                "max_bars": 8,
+                "btc_return_lookback_hours": 24,
+                "max_btc_return_pct": -1.0,
+            },
+        ),
+        CandidateSpec(
+            "fold2_short_donchian80_ny_oi_cooling",
+            "fold2_risk_off_short",
+            "donchian_breakdown",
+            benchmark,
+            exit_style="short_time_stop",
+            regime_filter="new_york_session",
+            use_correlation_filter=False,
+            params={
+                **coverage_short8,
+                "lookback": 80,
+                "max_bars": 8,
+                "btc_return_lookback_hours": 24,
+                "max_btc_return_pct": -1.0,
+                "max_metrics_oi_24h_change_pct": 0.0,
+                "max_metrics_age_minutes": 15,
+            },
+        ),
+        CandidateSpec(
+            "fold2_short_donchian48_ny_oi_cooling",
+            "fold2_risk_off_short",
+            "donchian_breakdown",
+            benchmark,
+            exit_style="short_time_stop",
+            regime_filter="new_york_session",
+            use_correlation_filter=False,
+            params={
+                **coverage_short8,
+                "lookback": 48,
+                "max_bars": 8,
+                "btc_return_lookback_hours": 24,
+                "max_btc_return_pct": -1.0,
+                "max_metrics_oi_24h_change_pct": 0.0,
+                "max_metrics_age_minutes": 15,
+            },
+        ),
+        CandidateSpec(
+            "fold2_short_htf_ny_oi_cooling",
+            "fold2_risk_off_short",
+            "htf_trend_continuation_short",
+            benchmark,
+            exit_style="short_time_stop",
+            regime_filter="new_york_session",
+            use_correlation_filter=False,
+            params={
+                **coverage_short8,
+                "max_bars": 8,
+                "btc_return_lookback_hours": 24,
+                "max_btc_return_pct": -1.0,
+                "max_metrics_oi_24h_change_pct": 0.0,
+                "max_metrics_age_minutes": 15,
+            },
+        ),
+        CandidateSpec(
+            "fold2_short_ema_ny_oi_cooling",
+            "fold2_risk_off_short",
+            "ema_pullback_short",
+            benchmark,
+            exit_style="short_time_stop",
+            regime_filter="new_york_session",
+            use_correlation_filter=False,
+            params={
+                **coverage_short8,
+                "max_bars": 8,
+                "btc_return_lookback_hours": 24,
+                "max_btc_return_pct": -1.0,
+                "max_metrics_oi_24h_change_pct": 0.0,
+                "max_metrics_age_minutes": 15,
+            },
+        ),
+        CandidateSpec(
+            "fold2_short_donchian80_offhours_oi_cooling",
+            "fold2_risk_off_short",
+            "donchian_breakdown",
+            benchmark,
+            exit_style="short_time_stop",
+            regime_filter="off_hours",
+            use_session_filter=False,
+            use_correlation_filter=False,
+            params={
+                **coverage_short8,
+                "lookback": 80,
+                "max_bars": 8,
+                "btc_return_lookback_hours": 24,
+                "max_btc_return_pct": -1.0,
+                "max_metrics_oi_24h_change_pct": 0.0,
+                "max_metrics_age_minutes": 15,
+            },
+        ),
+        CandidateSpec(
+            "fold2_short_donchian48_offhours_oi_cooling",
+            "fold2_risk_off_short",
+            "donchian_breakdown",
+            benchmark,
+            exit_style="short_time_stop",
+            regime_filter="off_hours",
+            use_session_filter=False,
+            use_correlation_filter=False,
+            params={
+                **coverage_short8,
+                "lookback": 48,
+                "max_bars": 8,
+                "btc_return_lookback_hours": 24,
+                "max_btc_return_pct": -1.0,
+                "max_metrics_oi_24h_change_pct": 0.0,
+                "max_metrics_age_minutes": 15,
+            },
+        ),
+        CandidateSpec(
+            "fold2_short_donchian80_ny_sell_pressure",
+            "fold2_risk_off_short",
+            "donchian_breakdown",
+            benchmark,
+            exit_style="short_time_stop",
+            regime_filter="new_york_session",
+            use_correlation_filter=False,
+            params={
+                **coverage_short8,
+                "lookback": 80,
+                "max_bars": 8,
+                "btc_return_lookback_hours": 24,
+                "max_btc_return_pct": -1.0,
+                "max_metrics_oi_24h_change_pct": 0.0,
+                "max_taker_buy_sell_ratio": 1.0,
+                "max_metrics_age_minutes": 15,
+            },
+        ),
+        CandidateSpec(
+            "crash_rebound_active",
+            "absurd_candle",
+            "crash_rebound",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            params={
+                "max_bars": 8,
+                "min_flush_atr": 2.5,
+                "min_close_location": 0.55,
+                "min_volume_percentile": 0.70,
+                "stop_atr_mult": 0.80,
+            },
+        ),
+        CandidateSpec(
+            "crash_rebound_off_hours",
+            "absurd_candle",
+            "crash_rebound",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="off_hours",
+            use_session_filter=False,
+            params={
+                "max_bars": 8,
+                "min_flush_atr": 2.5,
+                "min_close_location": 0.55,
+                "min_volume_percentile": 0.70,
+                "stop_atr_mult": 0.80,
+            },
+        ),
+        CandidateSpec(
+            "breakout_pullback_active",
+            "absurd_candle",
+            "breakout_pullback",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            params={"max_bars": 16, "lookback": 48, "pullback_bars": 16, "level_buffer_atr": 0.35},
+        ),
+        CandidateSpec(
+            "breakout_pullback_no_corr",
+            "absurd_candle",
+            "breakout_pullback",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={"max_bars": 16, "lookback": 48, "pullback_bars": 16, "level_buffer_atr": 0.35},
+        ),
+        CandidateSpec(
+            "session_trap_long",
+            "absurd_candle",
+            "session_trap_long",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            params={"max_bars": 12, "range_minutes": 60, "trade_window_hours": 5},
+        ),
+        CandidateSpec(
+            "session_trap_short",
+            "absurd_candle",
+            "session_trap_short",
+            benchmark,
+            exit_style="short_time_stop",
+            regime_filter="active_session",
+            params={"max_bars": 12, "range_minutes": 60, "trade_window_hours": 5},
+        ),
+        CandidateSpec(
+            "exhaustion_short_active",
+            "absurd_candle",
+            "exhaustion_short",
+            benchmark,
+            exit_style="short_time_stop",
+            regime_filter="active_session",
+            params={
+                "max_bars": 8,
+                "min_push_atr": 2.5,
+                "min_close_location": 0.80,
+                "min_volume_percentile": 0.90,
+                "stop_atr_mult": 0.80,
+            },
+        ),
+        CandidateSpec(
+            "monday_london_trap_long",
+            "absurd_candle",
+            "session_trap_long",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            params={"max_bars": 12, "range_minutes": 60, "trade_window_hours": 5, "allowed_weekdays": "0"},
+        ),
         CandidateSpec("ema_pullback", "benchmark", "ema_pullback", benchmark),
         CandidateSpec("donchian_breakout", "benchmark", "donchian_breakout", benchmark),
         CandidateSpec("opening_session_breakout", "benchmark", "opening_session_breakout", benchmark),
         CandidateSpec("htf_trend_continuation", "benchmark", "htf_trend_continuation", benchmark),
     ]
+
+
+def candidate_needs_funding(candidate: CandidateSpec) -> bool:
+    funding_keys = {
+        "min_funding_bps",
+        "max_funding_bps",
+        "max_abs_funding_bps",
+        "max_funding_age_hours",
+        "require_funding_data",
+    }
+    return any(key in candidate.params for key in funding_keys)
+
+
+def candidate_needs_metrics(candidate: CandidateSpec) -> bool:
+    metric_keys = {
+        "min_taker_buy_sell_ratio",
+        "max_taker_buy_sell_ratio",
+        "min_global_account_long_short_ratio",
+        "max_global_account_long_short_ratio",
+        "min_top_trader_account_long_short_ratio",
+        "max_top_trader_account_long_short_ratio",
+        "min_top_trader_position_long_short_ratio",
+        "max_top_trader_position_long_short_ratio",
+        "min_metrics_oi_24h_change_pct",
+        "max_metrics_oi_24h_change_pct",
+        "metrics_oi_change_lookback_hours",
+        "max_metrics_age_minutes",
+        "require_metrics_data",
+    }
+    return any(key in candidate.params for key in metric_keys)
+
+
+def candidates_need_funding(candidates: list[CandidateSpec]) -> bool:
+    return any(candidate_needs_funding(candidate) for candidate in candidates)
+
+
+def candidates_need_metrics(candidates: list[CandidateSpec]) -> bool:
+    return any(candidate_needs_metrics(candidate) for candidate in candidates)
 
 
 def evaluate_v2_reclaim(
@@ -633,6 +2173,62 @@ def evaluate_v2_reclaim(
     if evaluation.stage == "ready":
         return evaluation.risk_plan
     return None
+
+
+def build_direct_long_risk_plan(
+    entry: float,
+    stop_loss: float,
+    fee_bps: float,
+    config: study.StrategyConfig,
+) -> study.RiskPlan | None:
+    if entry <= 0.0 or stop_loss <= 0.0 or stop_loss >= entry:
+        return None
+    risk_per_unit = entry - stop_loss
+    risk_amount = DEFAULT_STARTING_CASH * config.risk_percent
+    quantity_by_risk = risk_amount / risk_per_unit
+    quantity_by_cash = study.max_affordable_quantity(DEFAULT_STARTING_CASH, entry, fee_bps)
+    suggested_quantity = min(quantity_by_risk, quantity_by_cash)
+    if suggested_quantity <= 0.0 or not math.isfinite(suggested_quantity):
+        return None
+    actual_risk = suggested_quantity * risk_per_unit
+    return study.RiskPlan(
+        entry=entry,
+        stop_loss=stop_loss,
+        take_profit_1=entry + risk_per_unit * config.tp1_r_multiple,
+        take_profit_2=entry + risk_per_unit * config.tp2_r_multiple,
+        risk_per_unit=risk_per_unit,
+        risk_amount=actual_risk,
+        suggested_quantity=suggested_quantity,
+        notional_estimate=suggested_quantity * entry,
+    )
+
+
+def build_direct_short_risk_plan(
+    entry: float,
+    stop_loss: float,
+    fee_bps: float,
+    config: study.StrategyConfig,
+) -> study.RiskPlan | None:
+    if entry <= 0.0 or stop_loss <= entry:
+        return None
+    risk_per_unit = stop_loss - entry
+    risk_amount = DEFAULT_STARTING_CASH * config.risk_percent
+    quantity_by_risk = risk_amount / risk_per_unit
+    quantity_by_cash = study.max_affordable_quantity(DEFAULT_STARTING_CASH, entry, fee_bps)
+    suggested_quantity = min(quantity_by_risk, quantity_by_cash)
+    if suggested_quantity <= 0.0 or not math.isfinite(suggested_quantity):
+        return None
+    actual_risk = suggested_quantity * risk_per_unit
+    return study.RiskPlan(
+        entry=entry,
+        stop_loss=stop_loss,
+        take_profit_1=entry - risk_per_unit * config.tp1_r_multiple,
+        take_profit_2=entry - risk_per_unit * config.tp2_r_multiple,
+        risk_per_unit=risk_per_unit,
+        risk_amount=actual_risk,
+        suggested_quantity=suggested_quantity,
+        notional_estimate=suggested_quantity * entry,
+    )
 
 
 def evaluate_ema_pullback(
@@ -676,6 +2272,55 @@ def evaluate_ema_pullback(
     return risk_plan
 
 
+def bearish_momentum_close(trigger_slice: list[study.Candle], config: study.StrategyConfig) -> bool:
+    if len(trigger_slice) < 2:
+        return False
+    last = trigger_slice[-1]
+    previous = trigger_slice[-2]
+    candle_range = max(last.high - last.low, 1e-9)
+    body_ratio = abs(last.close - last.open) / candle_range
+    close_location = (last.close - last.low) / candle_range
+    if last.close >= last.open:
+        return False
+    if body_ratio < config.trigger_body_ratio_min:
+        return False
+    if close_location > 1.0 - config.trigger_close_location_min:
+        return False
+    if config.require_close_above_previous_high and last.close >= previous.low:
+        return False
+    return True
+
+
+def evaluate_ema_pullback_short(
+    candidate: CandidateSpec,
+    current_price: float,
+    trend_slice: list[study.Candle],
+    setup_slice: list[study.Candle],
+    trigger_slice: list[study.Candle],
+    fee_bps: float,
+) -> study.RiskPlan | None:
+    if len(trend_slice) < 100 or len(setup_slice) < 60 or len(trigger_slice) < 20:
+        return None
+    trend_closes = [candle.close for candle in trend_slice]
+    setup_closes = [candle.close for candle in setup_slice]
+    ema_50_4h = ema(trend_closes, 50)
+    ema_100_4h = ema(trend_closes, 100)
+    ema_20_1h = ema(setup_closes, 20)
+    ema_50_1h = ema(setup_closes, 50)
+    atr_1h = study.calculate_atr(setup_slice, 14)
+    if None in (ema_50_4h, ema_100_4h, ema_20_1h, ema_50_1h, atr_1h):
+        return None
+    if not (trend_slice[-1].close < ema_50_4h < ema_100_4h):
+        return None
+    setup_close = setup_slice[-1].close
+    if setup_close > ema_50_1h or abs(setup_close - ema_20_1h) > atr_1h * 0.75:
+        return None
+    if not bearish_momentum_close(trigger_slice, candidate.config):
+        return None
+    stop_loss = max(float(ema_20_1h), max(candle.high for candle in setup_slice[-10:]))
+    return build_direct_short_risk_plan(current_price, stop_loss, fee_bps, candidate.config)
+
+
 def evaluate_donchian_breakout(
     candidate: CandidateSpec,
     current_price: float,
@@ -711,6 +2356,30 @@ def evaluate_donchian_breakout(
         candidate.config,
     )
     return risk_plan
+
+
+def evaluate_donchian_breakdown(
+    candidate: CandidateSpec,
+    current_price: float,
+    trend_slice: list[study.Candle],
+    setup_slice: list[study.Candle],
+    trigger_slice: list[study.Candle],
+    fee_bps: float,
+) -> study.RiskPlan | None:
+    lookback = int(candidate.params.get("lookback", 80))
+    if len(trigger_slice) < lookback + 2 or len(trend_slice) < 80 or len(setup_slice) < 20:
+        return None
+    trend_closes = [candle.close for candle in trend_slice]
+    ema_50_4h = ema(trend_closes, 50)
+    if ema_50_4h is None or trend_slice[-1].close > ema_50_4h:
+        return None
+    prior = trigger_slice[-lookback - 1 : -1]
+    breakdown = min(candle.low for candle in prior)
+    last = trigger_slice[-1]
+    if not (last.close < breakdown and last.close < last.open):
+        return None
+    stop_loss = max(candle.high for candle in trigger_slice[-20:])
+    return build_direct_short_risk_plan(current_price, stop_loss, fee_bps, candidate.config)
 
 
 def evaluate_opening_session_breakout(
@@ -801,6 +2470,208 @@ def evaluate_htf_trend_continuation(
     return risk_plan
 
 
+def evaluate_htf_trend_continuation_short(
+    candidate: CandidateSpec,
+    current_price: float,
+    trend_slice: list[study.Candle],
+    setup_slice: list[study.Candle],
+    trigger_slice: list[study.Candle],
+    fee_bps: float,
+) -> study.RiskPlan | None:
+    if len(trend_slice) < 80 or len(setup_slice) < 30 or len(trigger_slice) < 20:
+        return None
+    trend = study.analyze_structure(trend_slice, 2)
+    trend_closes = [candle.close for candle in trend_slice]
+    setup_closes = [candle.close for candle in setup_slice]
+    ema_50_4h = ema(trend_closes, 50)
+    ema_20_1h = ema(setup_closes, 20)
+    if ema_50_4h is None or ema_20_1h is None:
+        return None
+    if trend.bias != "bearish" or trend_slice[-1].close > ema_50_4h:
+        return None
+    if setup_slice[-1].close > ema_20_1h:
+        return None
+    if not bearish_momentum_close(trigger_slice, candidate.config):
+        return None
+    stop_loss = max(candle.high for candle in setup_slice[-6:])
+    return build_direct_short_risk_plan(current_price, stop_loss, fee_bps, candidate.config)
+
+
+def evaluate_crash_rebound(
+    candidate: CandidateSpec,
+    current_price: float,
+    setup_slice: list[study.Candle],
+    trigger_slice: list[study.Candle],
+    fee_bps: float,
+) -> study.RiskPlan | None:
+    if len(trigger_slice) < 120 or len(setup_slice) < 20:
+        return None
+    last = trigger_slice[-1]
+    previous = trigger_slice[-2]
+    atr_15m = study.calculate_atr(trigger_slice, 14)
+    if atr_15m is None or atr_15m <= 0.0:
+        return None
+    flush_atr = (previous.close - last.low) / atr_15m
+    candle_range = max(last.high - last.low, 1e-9)
+    close_location = (last.close - last.low) / candle_range
+    min_flush_atr = float(candidate.params.get("min_flush_atr", 2.5))
+    min_close_location = float(candidate.params.get("min_close_location", 0.55))
+    if flush_atr < min_flush_atr or close_location < min_close_location:
+        return None
+    stop_atr_mult = float(candidate.params.get("stop_atr_mult", 0.8))
+    stop_loss = min(last.low, min(candle.low for candle in trigger_slice[-4:])) - atr_15m * stop_atr_mult
+    return build_direct_long_risk_plan(current_price, stop_loss, fee_bps, candidate.config)
+
+
+def evaluate_exhaustion_short(
+    candidate: CandidateSpec,
+    current_price: float,
+    setup_slice: list[study.Candle],
+    trigger_slice: list[study.Candle],
+    fee_bps: float,
+) -> study.RiskPlan | None:
+    if len(trigger_slice) < 120 or len(setup_slice) < 20:
+        return None
+    last = trigger_slice[-1]
+    previous = trigger_slice[-2]
+    atr_15m = study.calculate_atr(trigger_slice, 14)
+    if atr_15m is None or atr_15m <= 0.0:
+        return None
+    push_atr = (last.high - previous.close) / atr_15m
+    candle_range = max(last.high - last.low, 1e-9)
+    close_location = (last.close - last.low) / candle_range
+    min_push_atr = float(candidate.params.get("min_push_atr", 2.5))
+    min_close_location = float(candidate.params.get("min_close_location", 0.80))
+    if push_atr < min_push_atr or close_location < min_close_location or last.close <= last.open:
+        return None
+    stop_atr_mult = float(candidate.params.get("stop_atr_mult", 0.8))
+    stop_loss = max(last.high, max(candle.high for candle in trigger_slice[-4:])) + atr_15m * stop_atr_mult
+    return build_direct_short_risk_plan(current_price, stop_loss, fee_bps, candidate.config)
+
+
+def evaluate_breakout_pullback(
+    candidate: CandidateSpec,
+    current_price: float,
+    setup_slice: list[study.Candle],
+    trigger_slice: list[study.Candle],
+    fee_bps: float,
+) -> study.RiskPlan | None:
+    lookback = int(candidate.params.get("lookback", 48))
+    pullback_bars = int(candidate.params.get("pullback_bars", 16))
+    if len(trigger_slice) < lookback + pullback_bars + 4 or len(setup_slice) < 20:
+        return None
+    atr_15m = study.calculate_atr(trigger_slice, 14)
+    if atr_15m is None or atr_15m <= 0.0:
+        return None
+    breakout_level: float | None = None
+    search_start = len(trigger_slice) - pullback_bars - 1
+    for index in range(search_start, len(trigger_slice) - 1):
+        if index < lookback:
+            continue
+        prior_high = max(candle.high for candle in trigger_slice[index - lookback : index])
+        candle = trigger_slice[index]
+        if candle.close > prior_high and candle.close > candle.open:
+            breakout_level = prior_high
+    if breakout_level is None:
+        return None
+    last = trigger_slice[-1]
+    level_buffer = atr_15m * float(candidate.params.get("level_buffer_atr", 0.35))
+    if not (
+        last.low <= breakout_level + level_buffer
+        and last.close > breakout_level
+        and last.close > last.open
+    ):
+        return None
+    stop_loss = min(breakout_level - level_buffer, min(candle.low for candle in trigger_slice[-6:]))
+    return build_direct_long_risk_plan(current_price, stop_loss, fee_bps, candidate.config)
+
+
+def session_range(
+    trigger_slice: list[study.Candle],
+    signal_close_time: int,
+    range_minutes: int,
+    trade_window_hours: int,
+) -> tuple[float, float] | None:
+    timestamp = time.gmtime(signal_close_time / 1000)
+    session_start_hour = 7 if 7 <= timestamp.tm_hour < 12 else 12 if 12 <= timestamp.tm_hour < 16 else 16 if 16 <= timestamp.tm_hour < 22 else None
+    if session_start_hour is None:
+        return None
+    day_start = signal_close_time - (
+        (timestamp.tm_hour * 60 + timestamp.tm_min) * 60 + timestamp.tm_sec
+    ) * 1000
+    session_start = day_start + session_start_hour * 60 * 60_000
+    range_end = session_start + range_minutes * 60_000
+    trade_end = session_start + trade_window_hours * 60 * 60_000
+    if not (range_end < signal_close_time <= trade_end):
+        return None
+    candles = [candle for candle in trigger_slice if session_start <= candle.open_time < range_end]
+    if len(candles) < max(2, range_minutes // 15):
+        return None
+    return max(candle.high for candle in candles), min(candle.low for candle in candles)
+
+
+def evaluate_session_trap_long(
+    candidate: CandidateSpec,
+    current_price: float,
+    setup_slice: list[study.Candle],
+    trigger_slice: list[study.Candle],
+    fee_bps: float,
+    signal_close_time: int,
+) -> study.RiskPlan | None:
+    if len(trigger_slice) < 80 or len(setup_slice) < 20:
+        return None
+    session = session_range(
+        trigger_slice,
+        signal_close_time,
+        int(candidate.params.get("range_minutes", 60)),
+        int(candidate.params.get("trade_window_hours", 5)),
+    )
+    if session is None:
+        return None
+    _, session_low = session
+    last = trigger_slice[-1]
+    candle_range = max(last.high - last.low, 1e-9)
+    close_location = (last.close - last.low) / candle_range
+    if not (last.low < session_low and last.close > session_low and close_location >= 0.55):
+        return None
+    atr_15m = study.calculate_atr(trigger_slice, 14)
+    if atr_15m is None:
+        return None
+    stop_loss = min(last.low, session_low) - atr_15m * 0.35
+    return build_direct_long_risk_plan(current_price, stop_loss, fee_bps, candidate.config)
+
+
+def evaluate_session_trap_short(
+    candidate: CandidateSpec,
+    current_price: float,
+    setup_slice: list[study.Candle],
+    trigger_slice: list[study.Candle],
+    fee_bps: float,
+    signal_close_time: int,
+) -> study.RiskPlan | None:
+    if len(trigger_slice) < 80 or len(setup_slice) < 20:
+        return None
+    session = session_range(
+        trigger_slice,
+        signal_close_time,
+        int(candidate.params.get("range_minutes", 60)),
+        int(candidate.params.get("trade_window_hours", 5)),
+    )
+    if session is None:
+        return None
+    session_high, _ = session
+    last = trigger_slice[-1]
+    candle_range = max(last.high - last.low, 1e-9)
+    close_location = (last.close - last.low) / candle_range
+    if not (last.high > session_high and last.close < session_high and close_location <= 0.45):
+        return None
+    atr_15m = study.calculate_atr(trigger_slice, 14)
+    if atr_15m is None:
+        return None
+    stop_loss = max(last.high, session_high) + atr_15m * 0.35
+    return build_direct_short_risk_plan(current_price, stop_loss, fee_bps, candidate.config)
+
+
 def passes_regime_filter(
     candidate: CandidateSpec,
     symbol: str,
@@ -826,6 +2697,18 @@ def passes_regime_filter(
         return threshold is not None and trigger_slice[-1].volume >= threshold
     if candidate.regime_filter == "overlap_session":
         return session_bucket(signal_close_time) == "london_ny_overlap"
+    if candidate.regime_filter == "london_session":
+        return session_bucket(signal_close_time) == "london"
+    if candidate.regime_filter == "london_or_overlap":
+        return session_bucket(signal_close_time) in {"london", "london_ny_overlap"}
+    if candidate.regime_filter == "overlap_or_new_york":
+        return session_bucket(signal_close_time) in {"london_ny_overlap", "new_york"}
+    if candidate.regime_filter == "new_york_session":
+        return session_bucket(signal_close_time) == "new_york"
+    if candidate.regime_filter == "active_session":
+        return session_bucket(signal_close_time) in {"london", "london_ny_overlap", "new_york"}
+    if candidate.regime_filter == "off_hours":
+        return session_bucket(signal_close_time) == "off_hours"
     if candidate.regime_filter == "breadth_60":
         bullish = 0
         checked = 0
@@ -838,6 +2721,209 @@ def passes_regime_filter(
                 bullish += 1
         return checked >= 5 and bullish / checked >= 0.60
     raise ValueError(f"Unsupported regime filter: {candidate.regime_filter}")
+
+
+def estimated_round_trip_fee_r(risk_plan: study.RiskPlan, fee_bps: float) -> float:
+    if risk_plan.risk_amount <= 0.0:
+        return math.inf
+    entry_fee = risk_plan.notional_estimate * fee_bps / 10_000.0
+    estimated_exit_fee = risk_plan.suggested_quantity * risk_plan.entry * fee_bps / 10_000.0
+    return (entry_fee + estimated_exit_fee) / risk_plan.risk_amount
+
+
+def passes_post_signal_filters(
+    candidate: CandidateSpec,
+    symbol: str,
+    signal_close_time: int,
+    trigger_slice: list[study.Candle],
+    btc_trend_slice: list[study.Candle],
+    risk_plan: study.RiskPlan,
+    fee_bps: float,
+    funding_rows: list[derivatives_data.FundingRate] | None = None,
+    metric_rows: list[derivatives_data.FuturesMetric] | None = None,
+) -> bool:
+    if candidate.params.get("exclude_btc") and symbol == study.BTC_REFERENCE_SYMBOL:
+        return False
+
+    min_hour_utc = candidate.params.get("min_hour_utc")
+    max_hour_utc = candidate.params.get("max_hour_utc")
+    if min_hour_utc is not None or max_hour_utc is not None:
+        hour = time.gmtime(signal_close_time / 1000).tm_hour
+        if min_hour_utc is not None and hour < int(min_hour_utc):
+            return False
+        if max_hour_utc is not None and hour >= int(max_hour_utc):
+            return False
+
+    allowed_weekdays = candidate.params.get("allowed_weekdays")
+    if allowed_weekdays is not None:
+        allowed = {int(item.strip()) for item in str(allowed_weekdays).split(",") if item.strip()}
+        if time.gmtime(signal_close_time / 1000).tm_wday not in allowed:
+            return False
+
+    excluded_symbols = candidate.params.get("excluded_symbols")
+    if excluded_symbols is not None:
+        excluded = {item.strip().upper() for item in str(excluded_symbols).split(",") if item.strip()}
+        if symbol in excluded:
+            return False
+
+    min_stop_pct = candidate.params.get("min_stop_pct")
+    if min_stop_pct is not None and risk_plan.risk_per_unit / risk_plan.entry < float(min_stop_pct):
+        return False
+
+    max_fee_drag_r = candidate.params.get("max_fee_drag_r")
+    if max_fee_drag_r is not None and estimated_round_trip_fee_r(risk_plan, fee_bps) > float(max_fee_drag_r):
+        return False
+
+    min_volume_percentile = candidate.params.get("min_volume_percentile")
+    if min_volume_percentile is not None:
+        if len(trigger_slice) < 100:
+            return False
+        threshold = percentile([candle.volume for candle in trigger_slice[-97:-1]], float(min_volume_percentile))
+        if threshold is None or trigger_slice[-1].volume < threshold:
+            return False
+
+    max_volume_percentile = candidate.params.get("max_volume_percentile")
+    if max_volume_percentile is not None:
+        if len(trigger_slice) < 100:
+            return False
+        threshold = percentile([candle.volume for candle in trigger_slice[-97:-1]], float(max_volume_percentile))
+        if threshold is None or trigger_slice[-1].volume > threshold:
+            return False
+
+    min_atr_expansion_multiple = candidate.params.get("min_atr_expansion_multiple")
+    if min_atr_expansion_multiple is not None:
+        if len(trigger_slice) < 120:
+            return False
+        recent_atr = study.calculate_atr(trigger_slice[-30:], 14)
+        baseline_atr = study.calculate_atr(trigger_slice[-120:-30], 14)
+        if (
+            recent_atr is None
+            or baseline_atr is None
+            or recent_atr <= baseline_atr * float(min_atr_expansion_multiple)
+        ):
+            return False
+
+    max_atr_expansion_multiple = candidate.params.get("max_atr_expansion_multiple")
+    if max_atr_expansion_multiple is not None:
+        if len(trigger_slice) < 120:
+            return False
+        recent_atr = study.calculate_atr(trigger_slice[-30:], 14)
+        baseline_atr = study.calculate_atr(trigger_slice[-120:-30], 14)
+        if (
+            recent_atr is None
+            or baseline_atr is None
+            or recent_atr > baseline_atr * float(max_atr_expansion_multiple)
+        ):
+            return False
+
+    if candidate.params.get("require_btc_bullish") and study.analyze_structure(btc_trend_slice, 2).bias != "bullish":
+        return False
+
+    min_btc_return = candidate.params.get("min_btc_return_pct")
+    max_btc_return = candidate.params.get("max_btc_return_pct")
+    if min_btc_return is not None or max_btc_return is not None:
+        lookback_hours = float(candidate.params.get("btc_return_lookback_hours", 24.0))
+        lookback_candles = max(1, int(round(lookback_hours / 4.0)))
+        if len(btc_trend_slice) <= lookback_candles:
+            return False
+        btc_return = derivatives_data.pct_change(
+            btc_trend_slice[-lookback_candles - 1].close,
+            btc_trend_slice[-1].close,
+        )
+        if btc_return is None:
+            return False
+        if min_btc_return is not None and btc_return < float(min_btc_return):
+            return False
+        if max_btc_return is not None and btc_return > float(max_btc_return):
+            return False
+
+    if candidate.params.get("require_overlap_session") and session_bucket(signal_close_time) != "london_ny_overlap":
+        return False
+
+    if candidate_needs_funding(candidate):
+        if not funding_rows:
+            return False
+        funding = derivatives_data.funding_at_or_before(funding_rows, signal_close_time)
+        if funding is None:
+            return False
+        max_age_hours = candidate.params.get("max_funding_age_hours")
+        if max_age_hours is not None:
+            age_hours = (signal_close_time - funding.funding_time) / (60 * 60 * 1000)
+            if age_hours < 0.0 or age_hours > float(max_age_hours):
+                return False
+        funding_bps = funding.funding_rate * 10_000.0
+        min_funding_bps = candidate.params.get("min_funding_bps")
+        if min_funding_bps is not None and funding_bps < float(min_funding_bps):
+            return False
+        max_funding_bps = candidate.params.get("max_funding_bps")
+        if max_funding_bps is not None and funding_bps > float(max_funding_bps):
+            return False
+        max_abs_funding_bps = candidate.params.get("max_abs_funding_bps")
+        if max_abs_funding_bps is not None and abs(funding_bps) > float(max_abs_funding_bps):
+            return False
+
+    if candidate_needs_metrics(candidate):
+        if not metric_rows:
+            return False
+        metric = derivatives_data.metric_at_or_before(metric_rows, signal_close_time)
+        if metric is None:
+            return False
+        max_age_minutes = candidate.params.get("max_metrics_age_minutes")
+        if max_age_minutes is not None:
+            age_minutes = (signal_close_time - metric.timestamp) / (60 * 1000)
+            if age_minutes < 0.0 or age_minutes > float(max_age_minutes):
+                return False
+
+        min_taker = candidate.params.get("min_taker_buy_sell_ratio")
+        if min_taker is not None and metric.sum_taker_long_short_vol_ratio < float(min_taker):
+            return False
+        max_taker = candidate.params.get("max_taker_buy_sell_ratio")
+        if max_taker is not None and metric.sum_taker_long_short_vol_ratio > float(max_taker):
+            return False
+
+        min_oi_change = candidate.params.get("min_metrics_oi_24h_change_pct")
+        max_oi_change = candidate.params.get("max_metrics_oi_24h_change_pct")
+        if min_oi_change is not None or max_oi_change is not None:
+            lookback_hours = float(candidate.params.get("metrics_oi_change_lookback_hours", 24.0))
+            previous_metric = derivatives_data.metric_at_or_before(
+                metric_rows,
+                signal_close_time - int(lookback_hours * 60 * 60 * 1000),
+            )
+            if previous_metric is None:
+                return False
+            oi_change = derivatives_data.pct_change(
+                previous_metric.sum_open_interest_value,
+                metric.sum_open_interest_value,
+            )
+            if oi_change is None:
+                return False
+            if min_oi_change is not None and oi_change < float(min_oi_change):
+                return False
+            if max_oi_change is not None and oi_change > float(max_oi_change):
+                return False
+
+        min_global = candidate.params.get("min_global_account_long_short_ratio")
+        if min_global is not None and metric.count_long_short_ratio < float(min_global):
+            return False
+        max_global = candidate.params.get("max_global_account_long_short_ratio")
+        if max_global is not None and metric.count_long_short_ratio > float(max_global):
+            return False
+
+        min_top_account = candidate.params.get("min_top_trader_account_long_short_ratio")
+        if min_top_account is not None and metric.count_toptrader_long_short_ratio < float(min_top_account):
+            return False
+        max_top_account = candidate.params.get("max_top_trader_account_long_short_ratio")
+        if max_top_account is not None and metric.count_toptrader_long_short_ratio > float(max_top_account):
+            return False
+
+        min_top_position = candidate.params.get("min_top_trader_position_long_short_ratio")
+        if min_top_position is not None and metric.sum_toptrader_long_short_ratio < float(min_top_position):
+            return False
+        max_top_position = candidate.params.get("max_top_trader_position_long_short_ratio")
+        if max_top_position is not None and metric.sum_toptrader_long_short_ratio > float(max_top_position):
+            return False
+
+    return True
 
 
 def evaluate_candidate_signal(
@@ -854,8 +2940,12 @@ def evaluate_candidate_signal(
         return evaluate_v2_reclaim(candidate, current_price, trend_slice, setup_slice, trigger_slice, fee_bps)
     if candidate.signal_kind == "ema_pullback":
         return evaluate_ema_pullback(candidate, current_price, trend_slice, setup_slice, trigger_slice, fee_bps)
+    if candidate.signal_kind == "ema_pullback_short":
+        return evaluate_ema_pullback_short(candidate, current_price, trend_slice, setup_slice, trigger_slice, fee_bps)
     if candidate.signal_kind == "donchian_breakout":
         return evaluate_donchian_breakout(candidate, current_price, trend_slice, setup_slice, trigger_slice, fee_bps)
+    if candidate.signal_kind == "donchian_breakdown":
+        return evaluate_donchian_breakdown(candidate, current_price, trend_slice, setup_slice, trigger_slice, fee_bps)
     if candidate.signal_kind == "opening_session_breakout":
         return evaluate_opening_session_breakout(
             candidate,
@@ -873,6 +2963,39 @@ def evaluate_candidate_signal(
             setup_slice,
             trigger_slice,
             fee_bps,
+        )
+    if candidate.signal_kind == "htf_trend_continuation_short":
+        return evaluate_htf_trend_continuation_short(
+            candidate,
+            current_price,
+            trend_slice,
+            setup_slice,
+            trigger_slice,
+            fee_bps,
+        )
+    if candidate.signal_kind == "crash_rebound":
+        return evaluate_crash_rebound(candidate, current_price, setup_slice, trigger_slice, fee_bps)
+    if candidate.signal_kind == "exhaustion_short":
+        return evaluate_exhaustion_short(candidate, current_price, setup_slice, trigger_slice, fee_bps)
+    if candidate.signal_kind == "breakout_pullback":
+        return evaluate_breakout_pullback(candidate, current_price, setup_slice, trigger_slice, fee_bps)
+    if candidate.signal_kind == "session_trap_long":
+        return evaluate_session_trap_long(
+            candidate,
+            current_price,
+            setup_slice,
+            trigger_slice,
+            fee_bps,
+            signal_close_time,
+        )
+    if candidate.signal_kind == "session_trap_short":
+        return evaluate_session_trap_short(
+            candidate,
+            current_price,
+            setup_slice,
+            trigger_slice,
+            fee_bps,
+            signal_close_time,
         )
     raise ValueError(f"Unsupported signal kind for {symbol}: {candidate.signal_kind}")
 
@@ -918,6 +3041,65 @@ def full_exit_trade(
             exit_price = last.close
 
     gross_r = (exit_price - risk_plan.entry) / risk_plan.risk_per_unit
+    fees_paid = (
+        risk_plan.notional_estimate * fee_bps / 10_000.0
+        + risk_plan.suggested_quantity * exit_price * fee_bps / 10_000.0
+    )
+    net_r = gross_r - fees_paid / risk_plan.risk_amount
+    return study.ReplayTrade(
+        opened_at=opened_at,
+        closed_at=closed_at,
+        outcome=outcome,
+        gross_r=gross_r,
+        net_r=net_r,
+        bars_held=bars_held,
+        fees_paid=fees_paid,
+    )
+
+
+def short_full_exit_trade(
+    opened_at: int,
+    risk_plan: study.RiskPlan,
+    future_candles: list[study.Candle],
+    fee_bps: float,
+    target_multiple: float,
+    max_bars: int | None = None,
+) -> study.ReplayTrade:
+    candles = future_candles[:max_bars] if max_bars is not None else future_candles
+    closed_at = opened_at
+    outcome = "timeout"
+    exit_price = risk_plan.entry
+    bars_held = len(candles)
+    target = risk_plan.entry - risk_plan.risk_per_unit * target_multiple
+
+    for index, candle in enumerate(candles):
+        hit_stop = candle.high >= risk_plan.stop_loss
+        hit_target = candle.low <= target
+        if hit_stop and hit_target:
+            closed_at = candle.open_time + study.interval_millis("15m")
+            outcome = "stop_loss"
+            exit_price = risk_plan.stop_loss
+            bars_held = index + 1
+            break
+        if hit_stop:
+            closed_at = candle.open_time + study.interval_millis("15m")
+            outcome = "stop_loss"
+            exit_price = risk_plan.stop_loss
+            bars_held = index + 1
+            break
+        if hit_target:
+            closed_at = candle.open_time + study.interval_millis("15m")
+            outcome = "take_profit_2"
+            exit_price = target
+            bars_held = index + 1
+            break
+    else:
+        if candles:
+            last = candles[-1]
+            closed_at = last.open_time + study.interval_millis("15m")
+            exit_price = last.close
+
+    gross_r = (risk_plan.entry - exit_price) / risk_plan.risk_per_unit
     fees_paid = (
         risk_plan.notional_estimate * fee_bps / 10_000.0
         + risk_plan.suggested_quantity * exit_price * fee_bps / 10_000.0
@@ -1040,6 +3222,15 @@ def simulate_candidate_trade(
             target_multiple=1.5,
             max_bars=int(candidate.params.get("max_bars", 16)),
         )
+    if candidate.exit_style == "short_time_stop":
+        return short_full_exit_trade(
+            opened_at,
+            risk_plan,
+            future_candles,
+            fee_bps,
+            target_multiple=float(candidate.params.get("target_multiple", 1.5)),
+            max_bars=int(candidate.params.get("max_bars", 16)),
+        )
     if candidate.exit_style == "atr_trail":
         atr_15m = study.calculate_atr(trigger_slice, 14)
         trail_atr = None
@@ -1110,6 +3301,19 @@ def collect_candidate_trades(
             signal_close_time,
         )
         if risk_plan is None:
+            index += 1
+            continue
+        if not passes_post_signal_filters(
+            candidate,
+            symbol,
+            signal_close_time,
+            trigger_slice,
+            btc_trend_slice,
+            risk_plan,
+            fee_bps,
+            data.funding,
+            data.metrics,
+        ):
             index += 1
             continue
 
@@ -1281,13 +3485,19 @@ def evaluate_candidate(
     validation_records = [record for record in records if record.split == "validation"]
     holdout_records = [record for record in records if record.split == "holdout"]
     fold_metrics = []
-    for fold in sorted({record.fold for record in validation_records if record.fold is not None}):
+    validation_fold_ids = [
+        split.fold
+        for split in splits
+        if split.name == "validation" and split.fold is not None
+    ]
+    for fold in sorted(validation_fold_ids):
         fold_records = [record for record in validation_records if record.fold == fold]
         fold_metrics.append({"fold": fold, **summarize_records(fold_records)})
     validation_metrics = summarize_records(validation_records)
     holdout_metrics = summarize_records(holdout_records)
     oos_metrics = summarize_records(records)
     passed, failures = evaluate_promotion(records, fold_metrics, holdout_metrics, full_walk_forward)
+    fold_trade_counts = [int(item["executed_trades"]) for item in fold_metrics]
 
     return {
         "candidate": candidate.name,
@@ -1298,6 +3508,8 @@ def evaluate_candidate(
         "passed_promotion_gates": passed,
         "gate_failures": failures,
         "folds_positive": sum(1 for item in fold_metrics if item["net_total_r"] > 0.0),
+        "folds_with_trades": sum(1 for item in fold_metrics if int(item["executed_trades"]) > 0),
+        "min_validation_fold_trades": min(fold_trade_counts) if fold_trade_counts else 0,
         "validation": validation_metrics,
         "holdout": holdout_metrics,
         "out_of_sample": oos_metrics,
@@ -1455,10 +3667,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--forward-candles", type=int, default=DEFAULT_FORWARD_CANDLES)
     parser.add_argument("--fee-bps", type=float, default=study.DEFAULT_FEE_BPS)
     parser.add_argument("--cache-dir", type=Path, default=Path("tmp/research_cache"))
+    parser.add_argument("--derivatives-cache-dir", type=Path, default=Path("tmp/derivatives_cache"))
     parser.add_argument("--output-dir", type=Path, default=Path("tmp/research_runs"))
     parser.add_argument("--json-out", type=Path, default=None)
     parser.add_argument("--refresh-cache", action="store_true")
+    parser.add_argument("--refresh-derivatives-cache", action="store_true")
+    parser.add_argument(
+        "--fetch-metrics",
+        action="store_true",
+        help="Fetch missing Binance Vision metrics for metrics-filter candidates. Default uses cached metrics only.",
+    )
     parser.add_argument("--max-candidates", type=int, default=None)
+    parser.add_argument(
+        "--candidate-family",
+        action="append",
+        default=[],
+        help="Evaluate only candidates from this family. Can be repeated.",
+    )
+    parser.add_argument(
+        "--candidate-name",
+        action="append",
+        default=[],
+        help="Evaluate only this candidate name. Can be repeated.",
+    )
     parser.add_argument("--workers", type=int, default=1, help="Parallel candidate workers. Use 1 for deterministic low-memory runs.")
     parser.add_argument("--smoke", action="store_true", help="Run a fast top-3/1000-candle sanity pass.")
     parser.add_argument("--no-log", action="store_true", help="Do not append a campaign summary to tmp/strategy_test_log.md.")
@@ -1490,8 +3721,19 @@ def main() -> int:
     requested_symbols = list(dict.fromkeys(requested_symbols))
 
     candidates = build_candidates()
+    if args.candidate_family:
+        families = set(args.candidate_family)
+        candidates = [candidate for candidate in candidates if candidate.family in families]
+    if args.candidate_name:
+        names = set(args.candidate_name)
+        candidates = [candidate for candidate in candidates if candidate.name in names]
     if args.max_candidates is not None:
         candidates = candidates[: args.max_candidates]
+    if not candidates:
+        print("[error] no candidates selected.", file=sys.stderr)
+        return 2
+    include_funding = candidates_need_funding(candidates)
+    include_metrics = candidates_need_metrics(candidates)
 
     full_walk_forward = args.trigger_limit >= RESEARCH_CANDLES + HOLDOUT_CANDLES
     splits = build_splits(args.trigger_limit, args.forward_candles)
@@ -1501,7 +3743,17 @@ def main() -> int:
         if len(market_data) >= args.universe_limit:
             break
         print(f"[fetch] {symbol} trigger={args.trigger_limit}", file=sys.stderr)
-        data = fetch_market_data(symbol, args.trigger_limit, args.cache_dir, args.refresh_cache)
+        data = fetch_market_data(
+            symbol,
+            args.trigger_limit,
+            args.cache_dir,
+            args.refresh_cache,
+            derivatives_cache_dir=args.derivatives_cache_dir,
+            refresh_derivatives_cache=args.refresh_derivatives_cache,
+            include_funding=include_funding,
+            include_metrics=include_metrics,
+            metrics_cache_only=not args.fetch_metrics,
+        )
         if len(data.trigger) < args.trigger_limit:
             print(
                 f"[skip] {symbol} insufficient 15m history: {len(data.trigger)} < {args.trigger_limit}",
@@ -1556,6 +3808,9 @@ def main() -> int:
             "min_quote_volume": args.min_quote_volume,
             "workers": workers,
             "full_walk_forward": full_walk_forward,
+            "include_funding": include_funding,
+            "include_metrics": include_metrics,
+            "metrics_cache_only": not args.fetch_metrics,
             "promotion_gates": {
                 "min_trades": MIN_PROMOTION_TRADES,
                 "min_net_avg_r": MIN_PROMOTION_NET_AVG_R,

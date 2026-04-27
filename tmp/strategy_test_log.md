@@ -3918,3 +3918,518 @@
 - Top gate failure counts: `net_avg_r<0.1=18, profit_factor<1.25=18, holdout_net_total_r<=0=18, holdout_net_avg_r<0.05=18, folds_positive<4=18`
 - Promoted strategies: `none`
 
+
+### Research campaign 2026-04-26T18:43:35Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\focused_overlap_smoke_20260426.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT`
+- Candidates tested: `22`
+- Universe filter: `profile=strict`, `min_quote_volume=5000000.0`
+- Top candidate: `v2_reclaim_loose`
+- Top OOS: `trades=3`, `net_total_r=-3.8257`, `net_avg_r=-1.2752`, `pf=0.0`
+- Top gate status: `fail`
+- Top gate failures: `not_full_12000_candle_walk_forward, executed_trades<80, net_avg_r<0.1, profit_factor<1.25, holdout_net_total_r<=0, holdout_net_avg_r<0.05, folds_positive<4, symbol_concentration>0.4, single_trade_concentration>0.25`
+- Top gate failure counts: `not_full_12000_candle_walk_forward=22, executed_trades<80=22, net_avg_r<0.1=22, profit_factor<1.25=22, holdout_net_total_r<=0=22`
+- Promoted strategies: `none`
+
+
+### Research campaign 2026-04-26T19:44:56Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\focused_overlap_family_smoke_20260426.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT`
+- Candidates tested: `6`
+- Universe filter: `profile=strict`, `min_quote_volume=5000000.0`
+- Top candidate: `v2_reclaim_overlap_fee_ok`
+- Top OOS: `trades=0`, `net_total_r=0`, `net_avg_r=0.0`, `pf=0.0`
+- Top gate status: `fail`
+- Top gate failures: `not_full_12000_candle_walk_forward, executed_trades<80, net_avg_r<0.1, profit_factor<1.25, holdout_net_total_r<=0, holdout_net_avg_r<0.05, folds_positive<4`
+- Top gate failure counts: `not_full_12000_candle_walk_forward=6, executed_trades<80=6, net_avg_r<0.1=6, profit_factor<1.25=6, holdout_net_total_r<=0=6`
+- Promoted strategies: `none`
+
+
+### Research campaign 2026-04-26T20:18:14Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\focused_overlap_family_full_20260426.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT, TONUSDT, XRPUSDT, BNBUSDT, RAYUSDT, LDOUSDT, ZECUSDT, AXSUSDT, TRXUSDT, INJUSDT, ADAUSDT, AAVEUSDT, AVAXUSDT, SUIUSDT, LINKUSDT, XLMUSDT, LTCUSDT, NEARUSDT`
+- Candidates tested: `8`
+- Universe filter: `profile=strict`, `min_quote_volume=5000000.0`
+- Top candidate: `v2_reclaim_overlap_time_stop_fee_ok`
+- Top OOS: `trades=13`, `net_total_r=4.6063`, `net_avg_r=0.3543`, `pf=2.1797`
+- Top gate status: `fail`
+- Top gate failures: `executed_trades<80, holdout_net_total_r<=0, holdout_net_avg_r<0.05, folds_positive<4, symbol_concentration>0.4`
+- Top gate failure counts: `executed_trades<80=8, holdout_net_total_r<=0=8, holdout_net_avg_r<0.05=8, folds_positive<4=8, symbol_concentration>0.4=8`
+- Promoted strategies: `none`
+
+
+### Research campaign 2026-04-26T20:31:39Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\focused_widening_smoke_20260426.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT`
+- Candidates tested: `6`
+- Universe filter: `profile=strict`, `min_quote_volume=5000000.0`
+- Top candidate: `v2_reclaim_overlap_time_stop_no_btc`
+- Top OOS: `trades=0`, `net_total_r=0`, `net_avg_r=0.0`, `pf=0.0`
+- Top gate status: `fail`
+- Top gate failures: `not_full_12000_candle_walk_forward, executed_trades<80, net_avg_r<0.1, profit_factor<1.25, holdout_net_total_r<=0, holdout_net_avg_r<0.05, folds_positive<4`
+- Top gate failure counts: `not_full_12000_candle_walk_forward=6, executed_trades<80=6, net_avg_r<0.1=6, profit_factor<1.25=6, holdout_net_total_r<=0=6`
+- Promoted strategies: `none`
+
+
+### Research campaign 2026-04-26T21:14:39Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\focused_widening_full_20260426.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT, TONUSDT, XRPUSDT, BNBUSDT, RAYUSDT, LDOUSDT, ZECUSDT, AXSUSDT, TRXUSDT, INJUSDT, AAVEUSDT, ADAUSDT, AVAXUSDT, LINKUSDT, SUIUSDT, XLMUSDT, LTCUSDT, NEARUSDT`
+- Candidates tested: `8`
+- Universe filter: `profile=strict`, `min_quote_volume=5000000.0`
+- Top candidate: `v2_reclaim_overlap_ny_time_stop_loose_fee_no_btc`
+- Top OOS: `trades=37`, `net_total_r=11.1742`, `net_avg_r=0.302`, `pf=2.1054`
+- Top gate status: `fail`
+- Top gate failures: `executed_trades<80, folds_positive<4`
+- Top gate failure counts: `executed_trades<80=8, folds_positive<4=8, symbol_concentration>0.4=4, single_trade_concentration>0.25=2, net_avg_r<0.1=1`
+- Promoted strategies: `none`
+
+
+### Research campaign 2026-04-26T21:18:43Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\focused_scale_smoke_20260426.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT`
+- Candidates tested: `6`
+- Universe filter: `profile=strict`, `min_quote_volume=5000000.0`
+- Top candidate: `v2_reclaim_active_time_stop_loose_fee_no_btc`
+- Top OOS: `trades=0`, `net_total_r=0`, `net_avg_r=0.0`, `pf=0.0`
+- Top gate status: `fail`
+- Top gate failures: `not_full_12000_candle_walk_forward, executed_trades<80, net_avg_r<0.1, profit_factor<1.25, holdout_net_total_r<=0, holdout_net_avg_r<0.05, folds_positive<4`
+- Top gate failure counts: `not_full_12000_candle_walk_forward=6, executed_trades<80=6, net_avg_r<0.1=6, profit_factor<1.25=6, holdout_net_total_r<=0=6`
+- Promoted strategies: `none`
+
+
+### Research campaign 2026-04-26T21:50:05Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\focused_scale_full_20260426.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT, TONUSDT, XRPUSDT, BNBUSDT, LDOUSDT, RAYUSDT, ZECUSDT, AXSUSDT, INJUSDT, TRXUSDT, AAVEUSDT, ADAUSDT, AVAXUSDT, LINKUSDT, SUIUSDT, XLMUSDT, NEARUSDT, LTCUSDT`
+- Candidates tested: `8`
+- Universe filter: `profile=strict`, `min_quote_volume=5000000.0`
+- Top candidate: `v2_reclaim_active_time_stop_no_corr_no_btc`
+- Top OOS: `trades=65`, `net_total_r=11.2022`, `net_avg_r=0.1723`, `pf=1.4482`
+- Top gate status: `fail`
+- Top gate failures: `executed_trades<80, folds_positive<4`
+- Top gate failure counts: `folds_positive<4=8, executed_trades<80=6, net_avg_r<0.1=3, profit_factor<1.25=3, max_drawdown_r>10.0=2`
+- Promoted strategies: `none`
+
+
+### Research campaign 2026-04-26T22:22:32Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\focused_scale_top3_universe30_20260426.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT, TONUSDT, XRPUSDT, BNBUSDT, LDOUSDT, RAYUSDT, ZECUSDT, AXSUSDT, INJUSDT, TRXUSDT, ADAUSDT, AAVEUSDT, AVAXUSDT, LINKUSDT, SUIUSDT, XLMUSDT, LTCUSDT, NEARUSDT, ALGOUSDT, HBARUSDT, APTUSDT, SANDUSDT`
+- Candidates tested: `3`
+- Universe filter: `profile=strict`, `min_quote_volume=5000000.0`
+- Top candidate: `v2_reclaim_active_time_stop_no_corr_no_btc`
+- Top OOS: `trades=81`, `net_total_r=9.7162`, `net_avg_r=0.12`, `pf=1.2917`
+- Top gate status: `fail`
+- Top gate failures: `folds_positive<4`
+- Top gate failure counts: `folds_positive<4=3, executed_trades<80=1, net_avg_r<0.1=1, profit_factor<1.25=1`
+- Promoted strategies: `none`
+
+
+### Research campaign 2026-04-26T23:19:48Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\focused_refinement_smoke_20260427.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT`
+- Candidates tested: `6`
+- Universe filter: `profile=strict`, `min_quote_volume=5000000.0`
+- Top candidate: `v2_reclaim_active_no_corr_vol_lt90`
+- Top OOS: `trades=0`, `net_total_r=0`, `net_avg_r=0.0`, `pf=0.0`
+- Top gate status: `fail`
+- Top gate failures: `not_full_12000_candle_walk_forward, executed_trades<80, net_avg_r<0.1, profit_factor<1.25, holdout_net_total_r<=0, holdout_net_avg_r<0.05, folds_positive<4`
+- Top gate failure counts: `not_full_12000_candle_walk_forward=6, executed_trades<80=6, net_avg_r<0.1=6, profit_factor<1.25=6, holdout_net_total_r<=0=6`
+- Promoted strategies: `none`
+
+
+### Research campaign 2026-04-26T23:51:06Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\focused_refinement_full_20260427.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT, TONUSDT, XRPUSDT, BNBUSDT, LDOUSDT, RAYUSDT, ZECUSDT, INJUSDT, TRXUSDT, AXSUSDT, ADAUSDT, AAVEUSDT, AVAXUSDT, LINKUSDT, SUIUSDT, NEARUSDT, XLMUSDT, LTCUSDT, HBARUSDT, ALGOUSDT, APTUSDT, SANDUSDT`
+- Candidates tested: `8`
+- Universe filter: `profile=strict`, `min_quote_volume=5000000.0`
+- Top candidate: `v2_reclaim_active_no_corr_ex_worst6`
+- Top OOS: `trades=68`, `net_total_r=22.5475`, `net_avg_r=0.3316`, `pf=2.1846`
+- Top gate status: `fail`
+- Top gate failures: `executed_trades<80, folds_positive<4`
+- Top gate failure counts: `executed_trades<80=8, folds_positive<4=8, holdout_net_avg_r<0.05=2, holdout_net_total_r<=0=1`
+- Promoted strategies: `none`
+
+
+### Research campaign 2026-04-27T00:57:15Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\absurd_candle_smoke_20260427.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT`
+- Candidates tested: `6`
+- Universe filter: `profile=strict`, `min_quote_volume=5000000.0`
+- Top candidate: `breakout_pullback_active`
+- Top OOS: `trades=24`, `net_total_r=-16.3353`, `net_avg_r=-0.6806`, `pf=0.1281`
+- Top gate status: `fail`
+- Top gate failures: `not_full_12000_candle_walk_forward, executed_trades<80, net_avg_r<0.1, profit_factor<1.25, holdout_net_total_r<=0, holdout_net_avg_r<0.05, folds_positive<4, max_drawdown_r>10.0, symbol_concentration>0.4, single_trade_concentration>0.25`
+- Top gate failure counts: `not_full_12000_candle_walk_forward=6, executed_trades<80=6, net_avg_r<0.1=6, profit_factor<1.25=6, holdout_net_total_r<=0=6`
+- Promoted strategies: `none`
+
+
+### Research campaign 2026-04-27T01:27:55Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\absurd_candle_full_20260427.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT, TONUSDT, XRPUSDT, BNBUSDT, LDOUSDT, RAYUSDT, ZECUSDT, INJUSDT, TRXUSDT, ADAUSDT, AAVEUSDT, AVAXUSDT, AXSUSDT, LINKUSDT, SUIUSDT, NEARUSDT, LTCUSDT, XLMUSDT, HBARUSDT, ALGOUSDT, APTUSDT`
+- Candidates tested: `8`
+- Universe filter: `profile=strict`, `min_quote_volume=5000000.0`
+- Top candidate: `crash_rebound_active`
+- Top OOS: `trades=45`, `net_total_r=-9.1335`, `net_avg_r=-0.203`, `pf=0.4672`
+- Top gate status: `fail`
+- Top gate failures: `executed_trades<80, net_avg_r<0.1, profit_factor<1.25, holdout_net_total_r<=0, holdout_net_avg_r<0.05, folds_positive<4, max_drawdown_r>10.0`
+- Top gate failure counts: `net_avg_r<0.1=8, profit_factor<1.25=8, holdout_net_total_r<=0=8, holdout_net_avg_r<0.05=8, folds_positive<4=8`
+- Promoted strategies: `none`
+
+
+
+### Derivatives diagnostics 2026-04-27T08:29:04Z
+
+- Status: `done`
+- Artifact: `tmp\research_runs\derivatives_profile_20260427.json`
+- Source artifact: `tmp\research_runs\focused_scale_top3_universe30_20260426.json`
+- Trade diagnostics: `tmp\research_runs\near_miss_full_trade_diagnostics_20260427_010625.json`
+- Symbols profiled: `24`
+- Funding rows: `9451`
+- Open-interest rows: `11500`
+- Enriched trades: `81`
+- Best funding bucket by avg R: `-1..0bp` with `trades=17`, `net_avg_r=0.4784`, `pf=2.8872`
+- Promoted strategies: `none`
+### Research campaign 2026-04-27T09:16:09Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\derivatives_filter_core_20260427.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT, TONUSDT, XRPUSDT, BNBUSDT, LDOUSDT, RAYUSDT, ZECUSDT, AXSUSDT, INJUSDT, TRXUSDT, ADAUSDT, AAVEUSDT, AVAXUSDT, LINKUSDT, SUIUSDT, XLMUSDT, LTCUSDT, NEARUSDT, ALGOUSDT, HBARUSDT, APTUSDT, SANDUSDT`
+- Candidates tested: `3`
+- Top candidate: `v2_reclaim_active_no_corr_funding_not_panic`
+- Top OOS: `trades=61`, `net_total_r=11.9304`, `net_avg_r=0.1956`, `pf=1.491`
+- Top gate status: `fail`
+- Top gate failures: `executed_trades<80, folds_positive<4`
+- Top gate failure counts: `executed_trades<80=3, folds_positive<4=3`
+- Promoted strategies: `none`
+
+
+### Research campaign 2026-04-27T09:29:45Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\derivatives_filter_secondary_20260427.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT, TONUSDT, XRPUSDT, BNBUSDT, LDOUSDT, RAYUSDT, ZECUSDT, AXSUSDT, INJUSDT, TRXUSDT, ADAUSDT, AAVEUSDT, AVAXUSDT, LINKUSDT, SUIUSDT, XLMUSDT, LTCUSDT, NEARUSDT, ALGOUSDT, HBARUSDT, APTUSDT, SANDUSDT`
+- Candidates tested: `3`
+- Top candidate: `v2_reclaim_active_no_corr_funding_neg_to_pos1`
+- Top OOS: `trades=61`, `net_total_r=11.9304`, `net_avg_r=0.1956`, `pf=1.491`
+- Top gate status: `fail`
+- Top gate failures: `executed_trades<80, folds_positive<4`
+- Top gate failure counts: `executed_trades<80=3, folds_positive<4=3, net_avg_r<0.1=1, profit_factor<1.25=1, holdout_net_avg_r<0.05=1`
+- Promoted strategies: `none`
+
+
+
+### Derivatives diagnostics 2026-04-27T09:46:43Z
+
+- Status: `done`
+- Artifact: `tmp\research_runs\derivatives_metrics_profile_20260427.json`
+- Source artifact: `tmp\research_runs\focused_scale_top3_universe30_20260426.json`
+- Trade diagnostics: `tmp\research_runs\near_miss_full_trade_diagnostics_20260427_010625.json`
+- Symbols profiled: `24`
+- Funding rows: `9451`
+- Open-interest rows: `11500`
+- Metrics rows: `28512`
+- Enriched trades: `81`
+- Best funding bucket by avg R: `-1..0bp` with `trades=17`, `net_avg_r=0.4784`, `pf=2.8872`
+- Promoted strategies: `none`
+### Research campaign 2026-04-27T11:18:16Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\metrics_filter_top12_20260427.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT, TONUSDT, XRPUSDT, BNBUSDT, LDOUSDT, RAYUSDT, ZECUSDT, AXSUSDT, INJUSDT, TRXUSDT`
+- Candidates tested: `4`
+- Top candidate: `v2_reclaim_active_base_funding_taker_buy`
+- Top OOS: `trades=40`, `net_total_r=13.7946`, `net_avg_r=0.3449`, `pf=2.1448`
+- Top gate status: `fail`
+- Top gate failures: `executed_trades<80, folds_positive<4`
+- Top gate failure counts: `executed_trades<80=4, folds_positive<4=4, symbol_concentration>0.4=1`
+- Promoted strategies: `none`
+
+
+### Research campaign 2026-04-27T11:49:25Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\metrics_filter_full24_20260427.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT, TONUSDT, XRPUSDT, BNBUSDT, LDOUSDT, RAYUSDT, ZECUSDT, AXSUSDT, INJUSDT, TRXUSDT, ADAUSDT, AAVEUSDT, AVAXUSDT, LINKUSDT, SUIUSDT, XLMUSDT, LTCUSDT, NEARUSDT, ALGOUSDT, HBARUSDT, APTUSDT, SANDUSDT`
+- Candidates tested: `4`
+- Top candidate: `v2_reclaim_active_strict_funding_taker_buy`
+- Top OOS: `trades=39`, `net_total_r=12.4466`, `net_avg_r=0.3191`, `pf=1.9865`
+- Top gate status: `fail`
+- Top gate failures: `executed_trades<80, folds_positive<4`
+- Top gate failure counts: `folds_positive<4=4, executed_trades<80=2, net_avg_r<0.1=2, profit_factor<1.25=2, holdout_net_avg_r<0.05=2`
+- Promoted strategies: `none`
+
+
+### Research campaign 2026-04-27T11:54:31Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\metrics_filter_overlap_full24_20260427.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT, TONUSDT, XRPUSDT, BNBUSDT, LDOUSDT, RAYUSDT, ZECUSDT, AXSUSDT, INJUSDT, TRXUSDT, ADAUSDT, AAVEUSDT, AVAXUSDT, LINKUSDT, SUIUSDT, XLMUSDT, LTCUSDT, NEARUSDT, ALGOUSDT, HBARUSDT, APTUSDT, SANDUSDT`
+- Candidates tested: `2`
+- Top candidate: `v2_reclaim_overlap_strict_funding_taker_buy`
+- Top OOS: `trades=13`, `net_total_r=9.2738`, `net_avg_r=0.7134`, `pf=6.9706`
+- Top gate status: `fail`
+- Top gate failures: `executed_trades<80, folds_positive<4`
+- Top gate failure counts: `executed_trades<80=2, folds_positive<4=2`
+- Promoted strategies: `none`
+
+
+### Research campaign 2026-04-27T12:16:26Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\broad_derivatives_entry_full24_20260427.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT, TONUSDT, XRPUSDT, BNBUSDT, LDOUSDT, RAYUSDT, ZECUSDT, AXSUSDT, INJUSDT, TRXUSDT, ADAUSDT, AAVEUSDT, AVAXUSDT, LINKUSDT, SUIUSDT, XLMUSDT, LTCUSDT, NEARUSDT, ALGOUSDT, HBARUSDT, APTUSDT, SANDUSDT`
+- Candidates tested: `5`
+- Top candidate: `htf_continuation_london_overlap_funding_taker`
+- Top OOS: `trades=575`, `net_total_r=-15.1989`, `net_avg_r=-0.0264`, `pf=0.9268`
+- Top gate status: `fail`
+- Top gate failures: `net_avg_r<0.1, profit_factor<1.25, holdout_net_avg_r<0.05, folds_positive<4, max_drawdown_r>10.0`
+- Top gate failure counts: `net_avg_r<0.1=5, profit_factor<1.25=5, holdout_net_avg_r<0.05=5, folds_positive<4=5, max_drawdown_r>10.0=5`
+- Promoted strategies: `none`
+
+
+### Research campaign 2026-04-27T12:25:41Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\broad_derivatives_refined_full24_20260427.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT, TONUSDT, XRPUSDT, BNBUSDT, LDOUSDT, RAYUSDT, ZECUSDT, AXSUSDT, INJUSDT, TRXUSDT, ADAUSDT, AAVEUSDT, AVAXUSDT, LINKUSDT, SUIUSDT, XLMUSDT, LTCUSDT, NEARUSDT, ALGOUSDT, HBARUSDT, APTUSDT, SANDUSDT`
+- Candidates tested: `6`
+- Top candidate: `htf_continuation_london_funding_taker`
+- Top OOS: `trades=333`, `net_total_r=12.729`, `net_avg_r=0.0382`, `pf=1.1192`
+- Top gate status: `fail`
+- Top gate failures: `net_avg_r<0.1, profit_factor<1.25, folds_positive<4, max_drawdown_r>10.0`
+- Top gate failure counts: `folds_positive<4=6, executed_trades<80=5, symbol_concentration>0.4=3, net_avg_r<0.1=2, profit_factor<1.25=2`
+- Promoted strategies: `none`
+
+
+### Research campaign 2026-04-27T12:29:26Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\broad_derivatives_oi_sweep_full24_20260427.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT, TONUSDT, XRPUSDT, BNBUSDT, LDOUSDT, RAYUSDT, ZECUSDT, AXSUSDT, INJUSDT, TRXUSDT, ADAUSDT, AAVEUSDT, AVAXUSDT, LINKUSDT, SUIUSDT, XLMUSDT, LTCUSDT, NEARUSDT, ALGOUSDT, HBARUSDT, APTUSDT, SANDUSDT`
+- Candidates tested: `5`
+- Top candidate: `htf_london_funding_taker_oi_max0`
+- Top OOS: `trades=76`, `net_total_r=11.5411`, `net_avg_r=0.1519`, `pf=1.4318`
+- Top gate status: `fail`
+- Top gate failures: `executed_trades<80, folds_positive<4, max_drawdown_r>10.0`
+- Top gate failure counts: `folds_positive<4=5, executed_trades<80=4, max_drawdown_r>10.0=4, net_avg_r<0.1=2, profit_factor<1.25=2`
+- Promoted strategies: `none`
+
+
+### Fold diagnostics 2026-04-27T12:45:00Z
+
+- Status: `done`
+- Scope: `htf-london-oi-bottleneck`
+- Artifact: `tmp\research_runs\fold_diagnostics_htf_london_oi_neg10_pos1_20260427.json`
+- Candidate: `htf_london_funding_taker_oi_neg10_pos1`
+- OOS: `trades=105`, `net_total_r=11.3384`, `net_avg_r=0.108`, `pf=1.3296`
+- Holdout: `trades=72`, `net_total_r=14.6863`, `net_avg_r=0.204`
+- Validation folds with trades: `fold3=+0.7239R`, `fold4=-2.5843R`, `fold5=-1.4875R`; folds `1` and `2` had no trades.
+- Main finding: simple filters can improve trade quality but cannot satisfy the `4 of 5` positive-fold gate because fold coverage is missing.
+- Baseline artifact: `tmp\research_runs\fold_diagnostics_htf_baseline_20260427.json`
+- Baseline finding: ungated HTF continuation has fold-2 trades, but is strongly negative overall; fold 2 is mostly a funding-panic regime and the apparent New York panic workaround fails in holdout.
+- Promoted strategies: `none`
+
+
+### Research campaign 2026-04-27T20:27:32Z
+
+- Status: `done`
+- Scope: `coverage-first-scan`
+- Artifacts: `tmp\research_runs\coverage_scan_trend_reclaim_full24_20260427.json`, `tmp\research_runs\coverage_scan_breakout_full24_20260427.json`, `tmp\research_runs\coverage_scan_reversal_session_full24_20260427.json`
+- Candidates tested: `14`
+- Main result: broad entries generally had fold coverage, but were negative across the basket.
+- Least-bad coverage branch: `coverage_v2_moderate_active_time16`
+- OOS: `trades=94`, `net_total_r=2.5867`, `net_avg_r=0.0275`, `pf=1.0595`, `max_drawdown_r=8.3483`
+- Fold coverage: `5 of 5` folds had trades, but only `2 of 5` folds were net positive.
+- Promoted strategies: `none`
+
+
+### Research campaign 2026-04-27T20:27:32Z
+
+- Status: `done`
+- Scope: `coverage-refinement`
+- Diagnostic artifact: `tmp\research_runs\coverage_diagnostics_v2_moderate_20260427.json`
+- Refinement artifact: `tmp\research_runs\coverage_refinement_universe30_20260427.json`
+- Strict universe size reached: `29` symbols
+- Main result: removing or reducing New York exposure improved the moderate `v2_reclaim` branch, but made it too sparse and still fold-unstable.
+- Top candidate: `coverage_v2_moderate_10_16_funding_m2_p1`
+- Top OOS: `trades=44`, `net_total_r=9.1401`, `net_avg_r=0.2077`, `pf=1.5468`, `max_drawdown_r=2.9884`
+- Top gate status: `fail`
+- Top gate failures: `executed_trades<80, folds_positive<4`
+- Promoted strategies: `none`
+
+
+### Research campaign 2026-04-27T21:05:00Z
+
+- Status: `done`
+- Scope: `coverage-short-trend`
+- Artifact: `tmp\research_runs\coverage_short_trend_universe30_20260427.json`
+- Candidates tested: `5`
+- Main result: short-side trend mirrors had strong coverage, but were negative overall and failed holdout.
+- Top candidate: `coverage_short_donchian80_active_time16`
+- Top OOS: `trades=2850`, `net_total_r=-194.1106`, `net_avg_r=-0.0681`, `pf=0.7701`
+- Fold note: short trend helped fold `1`, but still lost fold `2`, fold `5`, and holdout.
+- Top gate status: `fail`
+- Top gate failures: `net_avg_r<0.1, profit_factor<1.25, holdout_net_total_r<=0, holdout_net_avg_r<0.05, folds_positive<4, max_drawdown_r>10.0`
+- Promoted strategies: `none`
+
+### Research campaign 2026-04-27T17:33:57Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\coverage_scan_trend_reclaim_full24_20260427.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT, TONUSDT, XRPUSDT, BNBUSDT, LDOUSDT, RAYUSDT, ZECUSDT, AXSUSDT, INJUSDT, TRXUSDT, ADAUSDT, AAVEUSDT, AVAXUSDT, LINKUSDT, SUIUSDT, XLMUSDT, LTCUSDT, NEARUSDT, ALGOUSDT, HBARUSDT, APTUSDT, SANDUSDT`
+- Candidates tested: `5`
+- Top candidate: `coverage_v2_moderate_active_time16`
+- Top OOS: `trades=94`, `net_total_r=2.5867`, `net_avg_r=0.0275`, `pf=1.0595`
+- Top gate status: `fail`
+- Top gate failures: `net_avg_r<0.1, profit_factor<1.25, holdout_net_avg_r<0.05, folds_positive<4`
+- Top gate failure counts: `net_avg_r<0.1=5, profit_factor<1.25=5, folds_positive<4=5, holdout_net_avg_r<0.05=4, max_drawdown_r>10.0=4`
+- Promoted strategies: `none`
+
+
+### Research campaign 2026-04-27T17:41:27Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\coverage_scan_breakout_full24_20260427.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT, TONUSDT, XRPUSDT, BNBUSDT, LDOUSDT, RAYUSDT, ZECUSDT, AXSUSDT, INJUSDT, TRXUSDT, ADAUSDT, AAVEUSDT, AVAXUSDT, LINKUSDT, SUIUSDT, XLMUSDT, LTCUSDT, NEARUSDT, ALGOUSDT, HBARUSDT, APTUSDT, SANDUSDT`
+- Candidates tested: `5`
+- Top candidate: `coverage_donchian80_active_time16`
+- Top OOS: `trades=1617`, `net_total_r=-83.8259`, `net_avg_r=-0.0518`, `pf=0.7989`
+- Top gate status: `fail`
+- Top gate failures: `net_avg_r<0.1, profit_factor<1.25, holdout_net_total_r<=0, holdout_net_avg_r<0.05, folds_positive<4, max_drawdown_r>10.0`
+- Top gate failure counts: `net_avg_r<0.1=5, profit_factor<1.25=5, holdout_net_total_r<=0=5, holdout_net_avg_r<0.05=5, folds_positive<4=5`
+- Promoted strategies: `none`
+
+
+### Research campaign 2026-04-27T17:46:54Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\coverage_scan_reversal_session_full24_20260427.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT, TONUSDT, XRPUSDT, BNBUSDT, LDOUSDT, RAYUSDT, ZECUSDT, AXSUSDT, INJUSDT, TRXUSDT, ADAUSDT, AAVEUSDT, AVAXUSDT, LINKUSDT, SUIUSDT, XLMUSDT, LTCUSDT, NEARUSDT, ALGOUSDT, HBARUSDT, APTUSDT, SANDUSDT`
+- Candidates tested: `4`
+- Top candidate: `coverage_crash_rebound_loose_active`
+- Top OOS: `trades=291`, `net_total_r=-62.8361`, `net_avg_r=-0.2159`, `pf=0.5245`
+- Top gate status: `fail`
+- Top gate failures: `net_avg_r<0.1, profit_factor<1.25, holdout_net_total_r<=0, holdout_net_avg_r<0.05, folds_positive<4, max_drawdown_r>10.0`
+- Top gate failure counts: `net_avg_r<0.1=4, profit_factor<1.25=4, holdout_net_total_r<=0=4, holdout_net_avg_r<0.05=4, folds_positive<4=4`
+- Promoted strategies: `none`
+
+
+### Research campaign 2026-04-27T18:27:32Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\coverage_refinement_universe30_20260427.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, BNBUSDT, ZECUSDT, TONUSDT, SUIUSDT, LDOUSDT, TRXUSDT, ADAUSDT, AAVEUSDT, AVAXUSDT, LINKUSDT, LTCUSDT, NEARUSDT, XLMUSDT, AXSUSDT, INJUSDT, HBARUSDT, UNIUSDT, DASHUSDT, APTUSDT, RAYUSDT, DOTUSDT, RUNEUSDT, BCHUSDT, ALGOUSDT, FILUSDT`
+- Candidates tested: `5`
+- Universe filter: `profile=strict`, `min_quote_volume=5000000.0`
+- Top candidate: `coverage_v2_moderate_10_16_funding_m2_p1`
+- Top OOS: `trades=44`, `net_total_r=9.1401`, `net_avg_r=0.2077`, `pf=1.5468`
+- Top gate status: `fail`
+- Top gate failures: `executed_trades<80, folds_positive<4`
+- Top gate failure counts: `executed_trades<80=5, folds_positive<4=5, net_avg_r<0.1=2, profit_factor<1.25=2, holdout_net_total_r<=0=2`
+- Promoted strategies: `none`
+
+
+### Research campaign 2026-04-27T18:46:47Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\coverage_short_trend_universe30_20260427.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, BNBUSDT, ZECUSDT, TONUSDT, SUIUSDT, TRXUSDT, LDOUSDT, ADAUSDT, AAVEUSDT, AVAXUSDT, LINKUSDT, LTCUSDT, NEARUSDT, XLMUSDT, AXSUSDT, INJUSDT, HBARUSDT, UNIUSDT, DASHUSDT, APTUSDT, RAYUSDT, DOTUSDT, BCHUSDT, RUNEUSDT, ALGOUSDT, FILUSDT`
+- Candidates tested: `5`
+- Universe filter: `profile=strict`, `min_quote_volume=5000000.0`
+- Top candidate: `coverage_short_donchian80_active_time16`
+- Top OOS: `trades=2850`, `net_total_r=-194.1106`, `net_avg_r=-0.0681`, `pf=0.7701`
+- Top gate status: `fail`
+- Top gate failures: `net_avg_r<0.1, profit_factor<1.25, holdout_net_total_r<=0, holdout_net_avg_r<0.05, folds_positive<4, max_drawdown_r>10.0`
+- Top gate failure counts: `net_avg_r<0.1=5, profit_factor<1.25=5, holdout_net_total_r<=0=5, holdout_net_avg_r<0.05=5, folds_positive<4=5`
+- Promoted strategies: `none`
+
+### Research campaign 2026-04-27T19:21:57Z
+
+- Status: `done`
+- Scope: `fold-regime-diagnostics`
+- Artifact: `tmp\research_runs\fold_regime_diagnostics_20260427.json`
+- Main result: fold `2` is a broad risk-off regime, not just a weak candidate pocket.
+- Fold 2 market: `BTC=-13.7453%`, basket median `=-14.9692%`, symbols positive/negative `0/29`, BTC max drawdown `=-23.9004%`.
+- Fold 2 derivatives context: median funding `=-0.1407bps`, funding panic share `=2.0877%`, median 24h OI value change `=-1.3229%`, taker buy pressure share `=49.3288%`.
+- Session note: fold 2 BTC London/overlap was slightly positive, while New York and off-hours carried the main downside.
+- Promoted strategies: `none`
+
+### Research campaign 2026-04-27T19:21:57Z
+
+- Status: `done`
+- Scope: `fold2-risk-off-short`
+- Artifact: `tmp\research_runs\fold2_risk_off_short_universe30_20260427.json`
+- Candidates tested: `8`
+- Universe: strict Binance spot `30` symbols.
+- Main result: risk-off short entries targeting New York/off-hours with BTC-down and OI-cooling gates failed; the answer is not simple directional shorting.
+- Top candidate: `fold2_short_donchian80_offhours_oi_cooling`
+- Top OOS: `trades=359`, `net_total_r=-16.5786`, `net_avg_r=-0.0462`, `pf=0.7353`, `max_drawdown_r=26.4022`
+- Fold note: top variant still lost fold `2` (`trades=92`, `net_total_r=-12.4828`); `fold2_short_donchian80_ny_sell_pressure` nearly flattened fold `2` (`-0.0698R`) but failed badly OOS and holdout.
+- Top gate status: `fail`
+- Top gate failures: `net_avg_r<0.1, profit_factor<1.25, holdout_net_total_r<=0, holdout_net_avg_r<0.05, folds_positive<4, max_drawdown_r>10.0`
+- Promoted strategies: `none`
+
+
+### Research campaign 2026-04-27T19:21:26Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\fold2_risk_off_short_universe30_20260427.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, BNBUSDT, ZECUSDT, TONUSDT, SUIUSDT, TRXUSDT, ADAUSDT, LDOUSDT, AAVEUSDT, AVAXUSDT, LINKUSDT, LTCUSDT, NEARUSDT, AXSUSDT, XLMUSDT, INJUSDT, HBARUSDT, UNIUSDT, DASHUSDT, APTUSDT, RAYUSDT, DOTUSDT, BCHUSDT, RUNEUSDT, ALGOUSDT, FILUSDT, RENDERUSDT`
+- Candidates tested: `8`
+- Universe filter: `profile=strict`, `min_quote_volume=5000000.0`
+- Top candidate: `fold2_short_donchian80_offhours_oi_cooling`
+- Top OOS: `trades=359`, `net_total_r=-16.5786`, `net_avg_r=-0.0462`, `pf=0.7353`
+- Top gate status: `fail`
+- Top gate failures: `net_avg_r<0.1, profit_factor<1.25, holdout_net_total_r<=0, holdout_net_avg_r<0.05, folds_positive<4, max_drawdown_r>10.0`
+- Top gate failure counts: `net_avg_r<0.1=8, profit_factor<1.25=8, holdout_net_total_r<=0=8, holdout_net_avg_r<0.05=8, folds_positive<4=8`
+- Promoted strategies: `none`
+

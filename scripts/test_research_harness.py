@@ -56,6 +56,30 @@ class ResearchHarnessFixtures(unittest.TestCase):
         self.assertEqual(trade.outcome, "take_profit_2")
         self.assertLess(trade.net_r, trade.gross_r)
 
+    def test_short_time_stop_handles_short_profit(self) -> None:
+        trade = harness.short_full_exit_trade(
+            opened_at=0,
+            risk_plan=study.RiskPlan(
+                entry=100.0,
+                stop_loss=110.0,
+                take_profit_1=90.0,
+                take_profit_2=80.0,
+                risk_per_unit=10.0,
+                risk_amount=100.0,
+                suggested_quantity=10.0,
+                notional_estimate=1_000.0,
+            ),
+            future_candles=[
+                study.Candle(0, 100.0, 101.0, 84.0, 85.0, 1.0),
+            ],
+            fee_bps=10.0,
+            target_multiple=1.5,
+            max_bars=8,
+        )
+        self.assertEqual(trade.outcome, "take_profit_2")
+        self.assertGreater(trade.gross_r, 0.0)
+        self.assertLess(trade.net_r, trade.gross_r)
+
     def test_closed_candles_exclude_unclosed_reclaim_candle(self) -> None:
         candles = [
             study.Candle(0, 99.0, 101.0, 98.0, 99.0, 1.0),
@@ -96,6 +120,593 @@ class ResearchHarnessFixtures(unittest.TestCase):
                 "leveraged_token",
             ],
         )
+
+    def test_post_signal_fee_filter_rejects_costly_trade(self) -> None:
+        candidate = harness.CandidateSpec(
+            "fee_filter_fixture",
+            "test",
+            "v2_reclaim",
+            study.StrategyConfig("test"),
+            params={"max_fee_drag_r": 0.01},
+        )
+
+        self.assertFalse(
+            harness.passes_post_signal_filters(
+                candidate,
+                "ETHUSDT",
+                0,
+                [],
+                [],
+                self.make_risk_plan(),
+                10.0,
+            )
+        )
+
+    def test_post_signal_volume_filter_uses_recent_percentile(self) -> None:
+        base = [
+            study.Candle(index * 900_000, 100.0, 101.0, 99.0, 100.0, 1.0)
+            for index in range(99)
+        ]
+        candidate = harness.CandidateSpec(
+            "volume_filter_fixture",
+            "test",
+            "v2_reclaim",
+            study.StrategyConfig("test"),
+            params={"min_volume_percentile": 0.70},
+        )
+
+        self.assertTrue(
+            harness.passes_post_signal_filters(
+                candidate,
+                "ETHUSDT",
+                0,
+                [*base, study.Candle(99 * 900_000, 100.0, 101.0, 99.0, 100.0, 2.0)],
+                [],
+                self.make_risk_plan(),
+                10.0,
+            )
+        )
+        self.assertFalse(
+            harness.passes_post_signal_filters(
+                candidate,
+                "ETHUSDT",
+                0,
+                [*base, study.Candle(99 * 900_000, 100.0, 101.0, 99.0, 100.0, 0.5)],
+                [],
+                self.make_risk_plan(),
+                10.0,
+            )
+        )
+
+    def test_focused_overlap_candidates_are_available(self) -> None:
+        focused = [candidate for candidate in harness.build_candidates() if candidate.family == "focused_overlap"]
+        self.assertGreaterEqual(len(focused), 8)
+        self.assertIn("v2_reclaim_overlap_volume_fee_ok", {candidate.name for candidate in focused})
+
+    def test_exclude_btc_post_signal_filter(self) -> None:
+        candidate = harness.CandidateSpec(
+            "exclude_btc_fixture",
+            "test",
+            "v2_reclaim",
+            study.StrategyConfig("test"),
+            params={"exclude_btc": True},
+        )
+
+        self.assertFalse(
+            harness.passes_post_signal_filters(
+                candidate,
+                "BTCUSDT",
+                0,
+                [],
+                [],
+                self.make_risk_plan(),
+                10.0,
+            )
+        )
+        self.assertTrue(
+            harness.passes_post_signal_filters(
+                candidate,
+                "ETHUSDT",
+                0,
+                [],
+                [],
+                self.make_risk_plan(),
+                10.0,
+            )
+        )
+
+    def test_excluded_symbols_post_signal_filter(self) -> None:
+        candidate = harness.CandidateSpec(
+            "excluded_symbols_fixture",
+            "test",
+            "v2_reclaim",
+            study.StrategyConfig("test"),
+            params={"excluded_symbols": "APTUSDT, AVAXUSDT"},
+        )
+
+        self.assertFalse(
+            harness.passes_post_signal_filters(
+                candidate,
+                "APTUSDT",
+                0,
+                [],
+                [],
+                self.make_risk_plan(),
+                10.0,
+            )
+        )
+        self.assertTrue(
+            harness.passes_post_signal_filters(
+                candidate,
+                "ETHUSDT",
+                0,
+                [],
+                [],
+                self.make_risk_plan(),
+                10.0,
+            )
+        )
+
+    def test_max_volume_filter_rejects_extreme_volume(self) -> None:
+        base = [
+            study.Candle(index * 900_000, 100.0, 101.0, 99.0, 100.0, 1.0)
+            for index in range(99)
+        ]
+        candidate = harness.CandidateSpec(
+            "max_volume_filter_fixture",
+            "test",
+            "v2_reclaim",
+            study.StrategyConfig("test"),
+            params={"max_volume_percentile": 0.90},
+        )
+
+        self.assertFalse(
+            harness.passes_post_signal_filters(
+                candidate,
+                "ETHUSDT",
+                0,
+                [*base, study.Candle(99 * 900_000, 100.0, 101.0, 99.0, 100.0, 2.0)],
+                [],
+                self.make_risk_plan(),
+                10.0,
+            )
+        )
+        self.assertTrue(
+            harness.passes_post_signal_filters(
+                candidate,
+                "ETHUSDT",
+                0,
+                [*base, study.Candle(99 * 900_000, 100.0, 101.0, 99.0, 100.0, 0.5)],
+                [],
+                self.make_risk_plan(),
+                10.0,
+            )
+        )
+
+    def test_focused_widening_candidates_are_available(self) -> None:
+        focused = [candidate for candidate in harness.build_candidates() if candidate.family == "focused_widening"]
+        self.assertGreaterEqual(len(focused), 8)
+        self.assertIn("v2_reclaim_overlap_ny_time_stop_atr_ok_no_btc", {candidate.name for candidate in focused})
+
+    def test_focused_scale_candidates_are_available(self) -> None:
+        focused = [candidate for candidate in harness.build_candidates() if candidate.family == "focused_scale"]
+        names = {candidate.name for candidate in focused}
+        self.assertGreaterEqual(len(focused), 8)
+        self.assertIn("v2_reclaim_active_time_stop_base_no_btc", names)
+        self.assertIn("v2_reclaim_overlap_ny_time_stop_no_corr_no_btc", names)
+
+    def test_focused_refinement_candidates_are_available(self) -> None:
+        focused = [candidate for candidate in harness.build_candidates() if candidate.family == "focused_refinement"]
+        names = {candidate.name for candidate in focused}
+        self.assertGreaterEqual(len(focused), 8)
+        self.assertIn("v2_reclaim_active_no_corr_vol_lt90", names)
+        self.assertIn("v2_reclaim_active_no_corr_ex_worst4", names)
+
+    def test_absurd_candle_candidates_are_available(self) -> None:
+        focused = [candidate for candidate in harness.build_candidates() if candidate.family == "absurd_candle"]
+        names = {candidate.name for candidate in focused}
+        self.assertGreaterEqual(len(focused), 8)
+        self.assertIn("crash_rebound_active", names)
+        self.assertIn("session_trap_short", names)
+
+    def test_funding_filter_uses_latest_non_stale_rate(self) -> None:
+        candidate = harness.CandidateSpec(
+            "funding_filter_fixture",
+            "test",
+            "v2_reclaim",
+            study.StrategyConfig("test"),
+            params={
+                "min_funding_bps": -0.9999,
+                "max_funding_bps": -0.0001,
+                "max_funding_age_hours": 12,
+            },
+        )
+        fresh_mild_negative = [
+            harness.derivatives_data.FundingRate("ETHUSDT", 9_000_000, -0.00005, 100.0)
+        ]
+        extreme_negative = [
+            harness.derivatives_data.FundingRate("ETHUSDT", 9_000_000, -0.0002, 100.0)
+        ]
+        positive = [
+            harness.derivatives_data.FundingRate("ETHUSDT", 9_000_000, 0.00001, 100.0)
+        ]
+        stale_mild_negative = [
+            harness.derivatives_data.FundingRate("ETHUSDT", 1_000_000, -0.00005, 100.0)
+        ]
+
+        self.assertTrue(
+            harness.passes_post_signal_filters(
+                candidate,
+                "ETHUSDT",
+                10_000_000,
+                [],
+                [],
+                self.make_risk_plan(),
+                10.0,
+                fresh_mild_negative,
+            )
+        )
+        self.assertFalse(
+            harness.passes_post_signal_filters(
+                candidate,
+                "ETHUSDT",
+                10_000_000,
+                [],
+                [],
+                self.make_risk_plan(),
+                10.0,
+                extreme_negative,
+            )
+        )
+        self.assertFalse(
+            harness.passes_post_signal_filters(
+                candidate,
+                "ETHUSDT",
+                10_000_000,
+                [],
+                [],
+                self.make_risk_plan(),
+                10.0,
+                positive,
+            )
+        )
+        self.assertFalse(
+            harness.passes_post_signal_filters(
+                candidate,
+                "ETHUSDT",
+                50_000_000,
+                [],
+                [],
+                self.make_risk_plan(),
+                10.0,
+                stale_mild_negative,
+            )
+        )
+
+    def test_derivatives_filter_candidates_are_available(self) -> None:
+        focused = [candidate for candidate in harness.build_candidates() if candidate.family == "derivatives_filter"]
+        names = {candidate.name for candidate in focused}
+        self.assertEqual(len(focused), 6)
+        self.assertIn("v2_reclaim_active_no_corr_funding_mild_neg", names)
+        self.assertIn("v2_reclaim_active_no_corr_funding_not_panic", names)
+
+    def test_metrics_filter_uses_latest_taker_ratio(self) -> None:
+        candidate = harness.CandidateSpec(
+            "metrics_filter_fixture",
+            "test",
+            "v2_reclaim",
+            study.StrategyConfig("test"),
+            params={"min_taker_buy_sell_ratio": 1.25, "max_metrics_age_minutes": 20},
+        )
+        fresh_buy_pressure = [
+            harness.derivatives_data.FuturesMetric(
+                "ETHUSDT",
+                9_900_000,
+                1.0,
+                1.0,
+                1.0,
+                1.0,
+                1.0,
+                1.30,
+            )
+        ]
+        weak_buy_pressure = [
+            harness.derivatives_data.FuturesMetric(
+                "ETHUSDT",
+                9_900_000,
+                1.0,
+                1.0,
+                1.0,
+                1.0,
+                1.0,
+                1.10,
+            )
+        ]
+
+        self.assertTrue(
+            harness.passes_post_signal_filters(
+                candidate,
+                "ETHUSDT",
+                10_000_000,
+                [],
+                [],
+                self.make_risk_plan(),
+                10.0,
+                metric_rows=fresh_buy_pressure,
+            )
+        )
+        self.assertFalse(
+            harness.passes_post_signal_filters(
+                candidate,
+                "ETHUSDT",
+                10_000_000,
+                [],
+                [],
+                self.make_risk_plan(),
+                10.0,
+                metric_rows=weak_buy_pressure,
+            )
+        )
+
+    def test_post_signal_filter_uses_utc_hour_window(self) -> None:
+        candidate = harness.CandidateSpec(
+            "hour_fixture",
+            "test",
+            "v2_reclaim",
+            study.StrategyConfig("test"),
+            params={"min_hour_utc": 10, "max_hour_utc": 16},
+        )
+        self.assertFalse(
+            harness.passes_post_signal_filters(
+                candidate,
+                "ETHUSDT",
+                9 * 60 * 60_000,
+                [],
+                [],
+                self.make_risk_plan(),
+                10.0,
+            )
+        )
+        self.assertTrue(
+            harness.passes_post_signal_filters(
+                candidate,
+                "ETHUSDT",
+                10 * 60 * 60_000,
+                [],
+                [],
+                self.make_risk_plan(),
+                10.0,
+            )
+        )
+        self.assertFalse(
+            harness.passes_post_signal_filters(
+                candidate,
+                "ETHUSDT",
+                16 * 60 * 60_000,
+                [],
+                [],
+                self.make_risk_plan(),
+                10.0,
+            )
+        )
+
+    def test_metrics_filter_uses_oi_cooling(self) -> None:
+        signal_time = 100_000_000
+        candidate = harness.CandidateSpec(
+            "metrics_oi_fixture",
+            "test",
+            "v2_reclaim",
+            study.StrategyConfig("test"),
+            params={
+                "min_metrics_oi_24h_change_pct": -10.0,
+                "max_metrics_oi_24h_change_pct": 0.0,
+            },
+        )
+        cooling = [
+            harness.derivatives_data.FuturesMetric(
+                "ETHUSDT",
+                signal_time - 24 * 60 * 60_000,
+                1.0,
+                1_000.0,
+                1.0,
+                1.0,
+                1.0,
+                1.30,
+            ),
+            harness.derivatives_data.FuturesMetric(
+                "ETHUSDT",
+                signal_time - 60_000,
+                1.0,
+                950.0,
+                1.0,
+                1.0,
+                1.0,
+                1.30,
+            ),
+        ]
+        expanding = [
+            harness.derivatives_data.FuturesMetric(
+                "ETHUSDT",
+                signal_time - 24 * 60 * 60_000,
+                1.0,
+                1_000.0,
+                1.0,
+                1.0,
+                1.0,
+                1.30,
+            ),
+            harness.derivatives_data.FuturesMetric(
+                "ETHUSDT",
+                signal_time - 60_000,
+                1.0,
+                1_050.0,
+                1.0,
+                1.0,
+                1.0,
+                1.30,
+            ),
+        ]
+
+        self.assertTrue(
+            harness.passes_post_signal_filters(
+                candidate,
+                "ETHUSDT",
+                signal_time,
+                [],
+                [],
+                self.make_risk_plan(),
+                10.0,
+                metric_rows=cooling,
+            )
+        )
+        self.assertFalse(
+            harness.passes_post_signal_filters(
+                candidate,
+                "ETHUSDT",
+                signal_time,
+                [],
+                [],
+                self.make_risk_plan(),
+                10.0,
+                metric_rows=expanding,
+            )
+        )
+
+    def test_metrics_filter_candidates_are_available(self) -> None:
+        focused = [candidate for candidate in harness.build_candidates() if candidate.family == "metrics_filter"]
+        names = {candidate.name for candidate in focused}
+        self.assertEqual(len(focused), 6)
+        self.assertIn("v2_reclaim_active_base_funding_taker_buy", names)
+        self.assertIn("v2_reclaim_active_base_taker_global_lte120", names)
+        self.assertIn("v2_reclaim_overlap_base_funding_taker_buy", names)
+
+    def test_london_or_overlap_regime_filter_excludes_new_york(self) -> None:
+        candidate = harness.CandidateSpec(
+            "london_overlap_fixture",
+            "test",
+            "v2_reclaim",
+            study.StrategyConfig("test"),
+            regime_filter="london_or_overlap",
+        )
+        self.assertTrue(harness.passes_regime_filter(candidate, "ETHUSDT", 7 * 60 * 60_000, [], [], {}))
+        self.assertTrue(harness.passes_regime_filter(candidate, "ETHUSDT", 12 * 60 * 60_000, [], [], {}))
+        self.assertFalse(harness.passes_regime_filter(candidate, "ETHUSDT", 16 * 60 * 60_000, [], [], {}))
+        london_only = harness.CandidateSpec(
+            "london_fixture",
+            "test",
+            "v2_reclaim",
+            study.StrategyConfig("test"),
+            regime_filter="london_session",
+        )
+        self.assertTrue(harness.passes_regime_filter(london_only, "ETHUSDT", 7 * 60 * 60_000, [], [], {}))
+        self.assertFalse(harness.passes_regime_filter(london_only, "ETHUSDT", 12 * 60 * 60_000, [], [], {}))
+
+    def test_new_york_regime_filter(self) -> None:
+        candidate = harness.CandidateSpec(
+            "new_york_fixture",
+            "test",
+            "v2_reclaim",
+            study.StrategyConfig("test"),
+            regime_filter="new_york_session",
+        )
+        self.assertFalse(harness.passes_regime_filter(candidate, "ETHUSDT", 12 * 60 * 60_000, [], [], {}))
+        self.assertTrue(harness.passes_regime_filter(candidate, "ETHUSDT", 16 * 60 * 60_000, [], [], {}))
+        self.assertFalse(harness.passes_regime_filter(candidate, "ETHUSDT", 22 * 60 * 60_000, [], [], {}))
+
+    def test_btc_return_post_signal_filter(self) -> None:
+        candidate = harness.CandidateSpec(
+            "btc_return_fixture",
+            "test",
+            "v2_reclaim",
+            study.StrategyConfig("test"),
+            params={"btc_return_lookback_hours": 24, "max_btc_return_pct": -1.0},
+        )
+        down = [
+            study.Candle(index * 4 * 60 * 60_000, close, close, close, close, 1.0)
+            for index, close in enumerate([100.0, 99.0, 98.0, 97.0, 96.5, 96.0, 95.0])
+        ]
+        up = [
+            study.Candle(index * 4 * 60 * 60_000, close, close, close, close, 1.0)
+            for index, close in enumerate([100.0, 100.5, 100.8, 101.0, 101.1, 101.2, 101.5])
+        ]
+        self.assertTrue(
+            harness.passes_post_signal_filters(
+                candidate,
+                "ETHUSDT",
+                0,
+                [],
+                down,
+                self.make_risk_plan(),
+                10.0,
+            )
+        )
+        self.assertFalse(
+            harness.passes_post_signal_filters(
+                candidate,
+                "ETHUSDT",
+                0,
+                [],
+                up,
+                self.make_risk_plan(),
+                10.0,
+            )
+        )
+
+    def test_broad_derivatives_entry_candidates_are_available(self) -> None:
+        focused = [candidate for candidate in harness.build_candidates() if candidate.family == "broad_derivatives_entry"]
+        names = {candidate.name for candidate in focused}
+        self.assertEqual(len(focused), 5)
+        self.assertIn("ema_pullback_london_overlap_funding_taker", names)
+        self.assertIn("htf_continuation_london_overlap_funding_taker", names)
+        self.assertIn("donchian_breakout_48_london_overlap_funding_taker", names)
+
+    def test_broad_derivatives_refined_candidates_are_available(self) -> None:
+        focused = [candidate for candidate in harness.build_candidates() if candidate.family == "broad_derivatives_refined"]
+        names = {candidate.name for candidate in focused}
+        self.assertEqual(len(focused), 6)
+        self.assertIn("htf_continuation_london_funding_taker", names)
+        self.assertIn("htf_continuation_london_funding_taker_oi_cooling", names)
+        self.assertIn("v2_reclaim_london_base_funding_taker_oi_cooling", names)
+
+    def test_broad_derivatives_oi_sweep_candidates_are_available(self) -> None:
+        focused = [candidate for candidate in harness.build_candidates() if candidate.family == "broad_derivatives_oi_sweep"]
+        names = {candidate.name for candidate in focused}
+        self.assertEqual(len(focused), 5)
+        self.assertIn("htf_london_funding_taker_oi_max0", names)
+        self.assertIn("htf_london_funding_taker_oi_neg10_pos1", names)
+        self.assertIn("htf_london_funding_taker_oi_neg10_0_maxbars8", names)
+
+    def test_coverage_scan_candidates_are_available(self) -> None:
+        focused = [candidate for candidate in harness.build_candidates() if candidate.family == "coverage_scan"]
+        names = {candidate.name for candidate in focused}
+        self.assertEqual(len(focused), 14)
+        self.assertIn("coverage_htf_active_time16", names)
+        self.assertIn("coverage_breakout_pullback48_active_time16", names)
+        self.assertIn("coverage_session_trap_short_active", names)
+
+    def test_coverage_refinement_candidates_are_available(self) -> None:
+        focused = [candidate for candidate in harness.build_candidates() if candidate.family == "coverage_refinement"]
+        names = {candidate.name for candidate in focused}
+        self.assertEqual(len(focused), 5)
+        self.assertIn("coverage_v2_moderate_london_overlap_time16", names)
+        self.assertIn("coverage_v2_moderate_active_10_16_time16", names)
+        self.assertIn("coverage_v2_moderate_10_16_funding_m2_p1", names)
+
+    def test_coverage_short_trend_candidates_are_available(self) -> None:
+        focused = [candidate for candidate in harness.build_candidates() if candidate.family == "coverage_short_trend"]
+        names = {candidate.name for candidate in focused}
+        self.assertEqual(len(focused), 5)
+        self.assertIn("coverage_short_htf_active_time16", names)
+        self.assertIn("coverage_short_donchian48_active_time16", names)
+        self.assertIn("coverage_short_ema_active_time16", names)
+
+    def test_fold2_risk_off_short_candidates_are_available(self) -> None:
+        focused = [candidate for candidate in harness.build_candidates() if candidate.family == "fold2_risk_off_short"]
+        names = {candidate.name for candidate in focused}
+        self.assertEqual(len(focused), 8)
+        self.assertIn("fold2_short_donchian80_ny_btc_down", names)
+        self.assertIn("fold2_short_donchian80_offhours_oi_cooling", names)
+        self.assertIn("fold2_short_donchian80_ny_sell_pressure", names)
 
 
 if __name__ == "__main__":
