@@ -161,6 +161,7 @@ def collect_detailed_events(
             fee_bps,
             data.funding,
             data.metrics,
+            market_data,
         ):
             index += 1
             continue
@@ -168,6 +169,18 @@ def collect_detailed_events(
         future = data.trigger[index + 1 : index + 1 + forward_candles]
         trade = harness.simulate_candidate_trade(candidate, signal_close_time, risk_plan, future, fee_bps, trigger_slice)
         estimated_fee_drag = harness.estimated_round_trip_fee_r(risk_plan, fee_bps)
+        diagnostics = harness.market_feature_diagnostics(
+            candidate,
+            symbol,
+            signal_close_time,
+            trigger_slice,
+            btc_trend_slice,
+            risk_plan,
+            fee_bps,
+            data.funding,
+            data.metrics,
+            market_data,
+        )
         row = {
             "candidate": candidate.name,
             "family": candidate.family,
@@ -191,7 +204,23 @@ def collect_detailed_events(
             "estimated_round_trip_fee_r": rounded(estimated_fee_drag),
             "volume_percentile_96": rounded(volume_percentile(trigger_slice)),
             "atr_expansion_30_vs_90": rounded(atr_expansion(trigger_slice)),
+            "btc_return_24h_pct": diagnostics.get("btc_return_24h_pct"),
+            "basket_positive_share_24h_pct": diagnostics.get("basket_positive_share_24h_pct"),
+            "relative_strength_percentile_24h": diagnostics.get("relative_strength_percentile_24h"),
+            "ai_score_v2": diagnostics.get("ai_score_v2"),
         }
+        if diagnostics.get("funding_rate_bps") is not None:
+            row["funding_rate_bps"] = diagnostics["funding_rate_bps"]
+        if diagnostics.get("metrics_open_interest_24h_change_pct") is not None:
+            row["metrics_open_interest_24h_change_pct"] = diagnostics["metrics_open_interest_24h_change_pct"]
+        if diagnostics.get("global_account_long_short_ratio") is not None:
+            row["global_account_long_short_ratio"] = diagnostics["global_account_long_short_ratio"]
+        if diagnostics.get("top_trader_account_long_short_ratio") is not None:
+            row["top_trader_account_long_short_ratio"] = diagnostics["top_trader_account_long_short_ratio"]
+        if diagnostics.get("top_trader_position_long_short_ratio") is not None:
+            row["top_trader_position_long_short_ratio"] = diagnostics["top_trader_position_long_short_ratio"]
+        if diagnostics.get("taker_buy_sell_ratio") is not None:
+            row["taker_buy_sell_ratio"] = diagnostics["taker_buy_sell_ratio"]
         rows.append(row)
         if candidate.config.serial_mode:
             index += max(1, trade.bars_held)

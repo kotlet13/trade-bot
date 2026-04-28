@@ -27,12 +27,16 @@ NUMERIC_FEATURES = [
     "stop_pct",
     "volume_percentile_96",
     "atr_expansion_30_vs_90",
+    "btc_return_24h_pct",
+    "basket_positive_share_24h_pct",
+    "relative_strength_percentile_24h",
     "funding_rate_bps",
     "metrics_open_interest_24h_change_pct",
     "global_account_long_short_ratio",
     "top_trader_account_long_short_ratio",
     "top_trader_position_long_short_ratio",
     "taker_buy_sell_ratio",
+    "ai_score_v2",
 ]
 SESSION_CATEGORIES = ["london", "london_ny_overlap", "new_york", "off_hours", "other"]
 KEEP_FRACTIONS = [0.25, 0.40, 0.55, 0.70, 0.85, 1.00]

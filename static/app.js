@@ -292,8 +292,8 @@ function renderSignalAssistant(signal) {
     },
     {
       label: "Mode",
-      value: signal.risk_plan ? "Paper setup" : "Watch only",
-      subvalue: "Brez auto executiona",
+      value: signal.risk_plan ? "Approved paper gate" : "Watch only",
+      subvalue: "Guarded auto-paper",
     },
   ]
     .map(
@@ -334,7 +334,7 @@ function renderSignalAssistant(signal) {
           TP1 ${formatMoney(signal.risk_plan.take_profit_1)}<br />
           TP2 ${formatMoney(signal.risk_plan.take_profit_2)}<br />
           Qty ${formatQuantity(signal.risk_plan.suggested_quantity)}<br />
-          Risk ${formatMoney(signal.risk_plan.risk_amount)}<br />
+          Risk ${formatMoney(signal.risk_plan.risk_amount)} (${signal.risk_plan.capital_at_risk_percent.toFixed(1)}%)<br />
           Notional ${formatMoney(signal.risk_plan.notional_estimate)}
         </span>
       </article>
@@ -799,7 +799,7 @@ function prefillTradeFromSignal() {
   tradeLimitPrice.value = "";
   tradeStopLoss.value = signal.risk_plan.stop_loss.toFixed(6);
   tradeTakeProfit.value = signal.risk_plan.take_profit_1.toFixed(6);
-  tradeNote.value = `Signal assistant ${formatSignalStage(signal.stage)} | ${signal.summary}`;
+  tradeNote.value = `${signal.strategy_version || "Signal assistant"} ${formatSignalStage(signal.stage)} | ${signal.summary}`;
   syncOrderFormState();
   tradeFeedback.textContent = "Signal setup je prenesen v paper order form. Pred oddajo se rocno preveri novice in korelacije.";
 }

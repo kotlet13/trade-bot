@@ -24,6 +24,44 @@ class ResearchHarnessFixtures(unittest.TestCase):
             notional_estimate=1_000.0,
         )
 
+    def make_market_data(self, symbol: str, closes: list[float]) -> harness.MarketData:
+        candles = [
+            study.Candle(index * 900_000, close, close, close, close, 1.0)
+            for index, close in enumerate(closes)
+        ]
+        return harness.MarketData(symbol, candles, candles, candles)
+
+    def make_scorecard_context(
+        self,
+    ) -> tuple[int, list[harness.derivatives_data.FundingRate], list[harness.derivatives_data.FuturesMetric]]:
+        signal_time = 60 * 60 * 60_000
+        funding_rows = [
+            harness.derivatives_data.FundingRate("ETHUSDT", signal_time - 60_000, -0.00005, 100.0)
+        ]
+        metric_rows = [
+            harness.derivatives_data.FuturesMetric(
+                "ETHUSDT",
+                signal_time - 24 * 60 * 60_000 - 60_000,
+                1.0,
+                1_000.0,
+                1.0,
+                1.20,
+                1.10,
+                1.30,
+            ),
+            harness.derivatives_data.FuturesMetric(
+                "ETHUSDT",
+                signal_time - 60_000,
+                1.0,
+                950.0,
+                1.0,
+                1.20,
+                1.10,
+                1.30,
+            ),
+        ]
+        return signal_time, funding_rows, metric_rows
+
     def test_same_candle_stop_before_tp_is_conservative(self) -> None:
         trade = study.simulate_trade(
             opened_at=0,
@@ -707,6 +745,139 @@ class ResearchHarnessFixtures(unittest.TestCase):
         self.assertIn("fold2_short_donchian80_ny_btc_down", names)
         self.assertIn("fold2_short_donchian80_offhours_oi_cooling", names)
         self.assertIn("fold2_short_donchian80_ny_sell_pressure", names)
+
+    def test_relative_strength_percentile_uses_basket_returns(self) -> None:
+        market_data = {
+            "ETHUSDT": self.make_market_data("ETHUSDT", [100.0, 101.0, 102.0, 105.0, 110.0]),
+            "SOLUSDT": self.make_market_data("SOLUSDT", [100.0, 99.0, 98.0, 95.0, 90.0]),
+            "BNBUSDT": self.make_market_data("BNBUSDT", [100.0, 100.0, 100.0, 100.0, 100.0]),
+        }
+        signal_close_time = 5 * 900_000
+        self.assertEqual(
+            harness.relative_strength_percentile("ETHUSDT", market_data, signal_close_time, 1.0),
+            1.0,
+        )
+        self.assertAlmostEqual(
+            harness.basket_positive_share_pct(market_data, signal_close_time, 1.0) or 0.0,
+            100.0 / 3.0,
+        )
+
+    def test_ai_scorecard_candidates_are_available(self) -> None:
+        focused = [candidate for candidate in harness.build_candidates() if candidate.family == "ai_scorecard_v2"]
+        names = {candidate.name for candidate in focused}
+        self.assertEqual(len(focused), 7)
+        self.assertIn("ai_score_v2_base_score5", names)
+        self.assertIn("ai_score_v2_moderate_compression_score5", names)
+
+    def test_ai_scorecard_ablation_candidates_are_available(self) -> None:
+        focused = [
+            candidate for candidate in harness.build_candidates() if candidate.family == "ai_scorecard_v2_ablation"
+        ]
+        names = {candidate.name for candidate in focused}
+        self.assertEqual(len(focused), len(harness.AI_SCORECARD_V2_ABLATION_COMPONENTS) + 1)
+        self.assertIn("ai_score_v2_ablation_control_score7", names)
+        self.assertIn("ai_score_v2_ablate_session", names)
+        self.assertIn("ai_score_v2_ablate_top_position", names)
+
+    def test_ai_scorecard_ablation_removes_only_selected_component(self) -> None:
+        signal_time, funding_rows, metric_rows = self.make_scorecard_context()
+        base_candidate = harness.CandidateSpec(
+            "ai_score_base_fixture",
+            "test",
+            "v2_reclaim",
+            study.StrategyConfig("test"),
+        )
+        ablated_candidate = harness.CandidateSpec(
+            "ai_score_ablate_fee_fixture",
+            "test",
+            "v2_reclaim",
+            study.StrategyConfig("test"),
+            params={"ablate_ai_components": "fee"},
+        )
+
+        base_score, base_components = harness.ai_scorecard_v2(
+            base_candidate,
+            "ETHUSDT",
+            signal_time,
+            [],
+            [],
+            self.make_risk_plan(),
+            10.0,
+            funding_rows,
+            metric_rows,
+            None,
+        )
+        ablated_score, ablated_components = harness.ai_scorecard_v2(
+            ablated_candidate,
+            "ETHUSDT",
+            signal_time,
+            [],
+            [],
+            self.make_risk_plan(),
+            10.0,
+            funding_rows,
+            metric_rows,
+            None,
+        )
+
+        self.assertEqual(base_components["fee_points"], 1)
+        self.assertEqual(ablated_components["fee_points"], 0)
+        self.assertEqual(ablated_components["fee_raw_points"], 1)
+        self.assertTrue(ablated_components["fee_ablated"])
+        self.assertEqual(base_score - ablated_score, 1)
+
+    def test_ai_scorecard_ablation_affects_min_score_gate(self) -> None:
+        signal_time, funding_rows, metric_rows = self.make_scorecard_context()
+        candidate = harness.CandidateSpec(
+            "ai_score_gate_fixture",
+            "test",
+            "v2_reclaim",
+            study.StrategyConfig("test"),
+            params={"min_ai_score": 11},
+        )
+        ablated_candidate = harness.CandidateSpec(
+            "ai_score_gate_ablate_fee_fixture",
+            "test",
+            "v2_reclaim",
+            study.StrategyConfig("test"),
+            params={"min_ai_score": 11, "ablate_ai_components": "fee"},
+        )
+
+        self.assertTrue(
+            harness.passes_post_signal_filters(
+                candidate,
+                "ETHUSDT",
+                signal_time,
+                [],
+                [],
+                self.make_risk_plan(),
+                10.0,
+                funding_rows,
+                metric_rows,
+                None,
+            )
+        )
+        self.assertFalse(
+            harness.passes_post_signal_filters(
+                ablated_candidate,
+                "ETHUSDT",
+                signal_time,
+                [],
+                [],
+                self.make_risk_plan(),
+                10.0,
+                funding_rows,
+                metric_rows,
+                None,
+            )
+        )
+
+    def test_risk_off_london_relief_candidates_are_available(self) -> None:
+        focused = [candidate for candidate in harness.build_candidates() if candidate.family == "risk_off_london_relief"]
+        names = {candidate.name for candidate in focused}
+        self.assertEqual(len(focused), 6)
+        self.assertIn("risk_off_london_relief_base", names)
+        self.assertIn("risk_off_london_relief_fast", names)
 
 
 if __name__ == "__main__":

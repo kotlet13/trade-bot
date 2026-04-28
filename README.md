@@ -31,18 +31,20 @@ Container ima nastavljen `restart: unless-stopped`, zato se po ponovnem zagonu D
 
 ## Kaj zna danes
 
-- watchlist za `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `BNBUSDT`
+- watchlist za strict promoted-research universe, vkljucno z `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `XRPUSDT`, `BNBUSDT`
 - candle chart na intervalih `1m`, `5m`, `15m`, `1h`, `4h`
 - signal assistant za izbran simbol:
     - `4h` trend filter
-    - `v2_reclaim_strategy` state machine: `WAIT -> STALK -> SETUP -> READY`
+    - active gated paper strategy: `ai_score_v2_base_score7`
+    - base reclaim state machine: `WAIT -> STALK -> SETUP -> READY`
     - `STALK`: cena je blizu `1h` supporta, vendar se ni zaprt reclaim
     - `SETUP`: zadnja zaprta `1h` svecka reclaim-a support
     - `READY`: sele po `1h` reclaimu pride se zaprt `15m` momentum trigger
   - `session` gate za nove entryje (`07:00-22:00 UTC`)
-  - `correlation` gate proti `BTCUSDT`
+  - `ai_score_v2` paper gate s funding, futures positioning, fee-drag, volume, ATR, BTC, basket breadth in relative-strength preverjanji
+  - BTC correlation diagnostika proti `BTCUSDT`
   - `news blackout` gate prek javnih `BEA`, `Fed`, `SEC` in `CoinDesk` virov brez prijave
-  - predlagan `entry / stop / TP1 / TP2 / qty` za paper workflow
+  - predlagan `entry / stop / TP1 / TP2 / qty` za rocni paper workflow brez auto executiona
 - replay/backtest za signal assistant:
     - pregled zadnjih `15m` signalov za izbran simbol
   - session in BTC correlation gate v replay porocilu
@@ -51,6 +53,7 @@ Container ima nastavljen `restart: unless-stopped`, zato se po ponovnem zagonu D
   - recent replay primeri z outcome in trajanje setupa
 - rocni `market` in `limit` paper orderji
 - stop-loss in take-profit na long paper entryjih
+- guarded auto-paper worker: ena globalna auto pozicija naenkrat, najvec 3 auto entryji na UTC dan, 2% dnevni realized-loss kill switch
 - virtualni cash, pozicije, odprti orderji in PnL
 - trade log z notes in lokalno persistenco v SQLite
 
@@ -85,17 +88,42 @@ Okoljske spremenljivke:
 - `APP_HOST=0.0.0.0`
 - `APP_PORT=3000`
 - `DATA_DIR=/data`
-- `WATCHLIST=BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT`
+- `WATCHLIST=<promoted universe; glej docker-compose.yml za privzeti polni seznam>`
 - `STARTING_CASH=10000`
 - `PAPER_FEE_BPS=10`
 - `DEFAULT_INTERVAL=1m`
+- `AUTO_PAPER_TRADING=true`
+- `AUTO_PAPER_INTERVAL_SECONDS=60`
+- `AUTO_PAPER_MAX_OPEN_SLOTS=1`
+- `AUTO_PAPER_MAX_DAILY_ENTRIES=3`
+- `AUTO_PAPER_MAX_DAILY_LOSS_PERCENT=2`
 
 Docker Compose mapira `8081:3000`, zato je aplikacija lokalno dosegljiva na `http://localhost:8081`.
+
+Forward paper report:
+
+```bash
+python scripts/forward_paper_report.py --markdown-out tmp/forward_paper_report_latest.md --json-out tmp/forward_paper_report_latest.json
+```
+
+Runtime/harness parity check:
+
+```bash
+python scripts/runtime_harness_parity.py --symbols ETHUSDT,SOLUSDT --markdown-out tmp/runtime_harness_parity_latest.md --json-out tmp/runtime_harness_parity_latest.json
+```
+
+Scorecard ablation research:
+
+```bash
+python scripts/research_harness.py --smoke --candidate-family ai_scorecard_v2_ablation --max-candidates 99 --workers 2 --json-out tmp/research_runs/smoke_ai_scorecard_v2_ablation.json
+python scripts/research_harness.py --candidate-family ai_scorecard_v2_ablation --trigger-limit 12000 --universe-limit 30 --workers 4 --json-out tmp/research_runs/ai_scorecard_v2_ablation_latest.json
+```
 
 ## Dokumentacija
 
 Podrobnejsa dokumentacija je v `docs/`:
 
 - [Pregled in roadmap](docs/overview-roadmap.md)
+- [Active paper strategy](docs/active-strategy.md)
 - [Arhitektura in operativa](docs/architecture-ops.md)
 - [Sodelovanje in capital ledger](docs/collaboration-capital.md)

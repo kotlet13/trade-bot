@@ -3,6 +3,7 @@ use std::{
     env, fmt, fs,
     path::Path,
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
 use axum::{
@@ -24,10 +25,22 @@ use tower_http::{
 };
 
 const BINANCE_DATA_API: &str = "https://data-api.binance.vision";
-const DEFAULT_WATCHLIST: &str = "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT";
+const BINANCE_FAPI_API: &str = "https://fapi.binance.com";
+const DEFAULT_WATCHLIST: &str = "BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT,TONUSDT,ZECUSDT,TRXUSDT,SUIUSDT,ADAUSDT,AAVEUSDT,LINKUSDT,AXSUSDT,AVAXUSDT,LTCUSDT,APTUSDT,NEARUSDT,LDOUSDT,XLMUSDT,HBARUSDT,ARBUSDT,UNIUSDT,INJUSDT,DOTUSDT,BCHUSDT";
 const DEFAULT_INTERVAL: &str = "1m";
 const DEFAULT_STARTING_CASH: f64 = 10_000.0;
 const DEFAULT_FEE_BPS: f64 = 10.0;
+const DEFAULT_AUTO_PAPER_INTERVAL_SECONDS: u64 = 60;
+const DEFAULT_AUTO_PAPER_MAX_OPEN_SLOTS: usize = 1;
+const DEFAULT_AUTO_PAPER_MAX_DAILY_ENTRIES: usize = 3;
+const DEFAULT_AUTO_PAPER_MAX_DAILY_LOSS_PERCENT: f64 = 2.0;
+const ACTIVE_PAPER_STRATEGY_VERSION: &str = "ai_score_v2_base_score7";
+const ACTIVE_PAPER_STRATEGY_MIN_SCORE: i32 = 7;
+const ACTIVE_PAPER_STRATEGY_MIN_STOP_PCT: f64 = 0.004;
+const ACTIVE_PAPER_STRATEGY_MAX_FEE_DRAG_R: f64 = 0.45;
+const ACTIVE_PAPER_STRATEGY_FUNDING_MAX_AGE_HOURS: f64 = 12.0;
+const ACTIVE_PAPER_STRATEGY_METRICS_MAX_AGE_MINUTES: f64 = 20.0;
+const ACTIVE_PAPER_STRATEGY_BASKET_LOOKBACK_HOURS: f64 = 24.0;
 const MAX_TRADES: usize = 200;
 const SIGNAL_REPLAY_TRIGGER_LIMIT: usize = 720;
 const SIGNAL_REPLAY_FORWARD_CANDLES: usize = 32;
@@ -58,6 +71,16 @@ struct AppState {
     default_interval: String,
     paper_fee_bps: f64,
     news_cache: Arc<Mutex<HashMap<String, CachedNewsStatus>>>,
+    auto_paper: AutoPaperConfig,
+}
+
+#[derive(Debug, Clone)]
+struct AutoPaperConfig {
+    enabled: bool,
+    interval_seconds: u64,
+    max_open_slots: usize,
+    max_daily_entries: usize,
+    max_daily_loss_percent: f64,
 }
 
 #[derive(Debug)]
@@ -312,9 +335,12 @@ struct SignalAssistant {
     strategy_version: &'static str,
     bias: SignalBias,
     stage: SignalStage,
+    technical_stage: SignalStage,
     confidence: u8,
+    ai_score: i32,
     summary: String,
     generated_at: i64,
+    signal_close_time: i64,
     timeframes: SignalTimeframes,
     checklist: Vec<SignalCheck>,
     risk_plan: Option<SignalRiskPlan>,
@@ -334,6 +360,49 @@ struct SignalCheck {
     label: String,
     passed: bool,
     detail: String,
+}
+
+#[derive(Debug)]
+struct AiScorecardEvaluation {
+    score: i32,
+    components: Vec<SignalCheck>,
+    blockers: Vec<String>,
+    warnings: Vec<String>,
+}
+
+#[derive(Debug)]
+struct ScorecardContext {
+    funding_bps: Option<(f64, i64)>,
+    metrics: Option<FuturesMetricSnapshot>,
+    basket: Option<BasketSnapshot>,
+    warnings: Vec<String>,
+}
+
+impl ScorecardContext {
+    fn empty() -> Self {
+        Self {
+            funding_bps: None,
+            metrics: None,
+            basket: None,
+            warnings: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct FuturesMetricSnapshot {
+    timestamp: i64,
+    taker_buy_sell_ratio: f64,
+    global_account_long_short_ratio: f64,
+    top_trader_position_long_short_ratio: f64,
+    open_interest_24h_change_pct: Option<f64>,
+}
+
+#[derive(Debug)]
+struct BasketSnapshot {
+    relative_strength_percentile: Option<f64>,
+    positive_share_pct: Option<f64>,
+    sample_size: usize,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -516,6 +585,41 @@ struct BinancePriceTicker {
     price: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct BinanceFundingRate {
+    symbol: String,
+    #[serde(rename = "fundingTime")]
+    funding_time: serde_json::Value,
+    #[serde(rename = "fundingRate")]
+    funding_rate: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct BinanceOpenInterestHist {
+    #[serde(rename = "sumOpenInterestValue")]
+    sum_open_interest_value: String,
+    timestamp: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct BinanceRatioRow {
+    #[serde(rename = "longShortRatio")]
+    long_short_ratio: Option<String>,
+    #[serde(rename = "buySellRatio")]
+    buy_sell_ratio: Option<String>,
+    timestamp: serde_json::Value,
+}
+
+#[derive(Debug)]
+struct AutoPaperCycleStats {
+    active_slots: usize,
+    daily_entries: usize,
+    daily_realized_pnl: f64,
+    initial_cash: f64,
+    cash_balance: f64,
+    fee_bps: f64,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let host = env::var("APP_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
@@ -535,6 +639,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(DEFAULT_FEE_BPS);
+    let auto_paper = AutoPaperConfig {
+        enabled: env_bool("AUTO_PAPER_TRADING", false),
+        interval_seconds: env::var("AUTO_PAPER_INTERVAL_SECONDS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(DEFAULT_AUTO_PAPER_INTERVAL_SECONDS)
+            .max(15),
+        max_open_slots: env::var("AUTO_PAPER_MAX_OPEN_SLOTS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(DEFAULT_AUTO_PAPER_MAX_OPEN_SLOTS)
+            .max(1),
+        max_daily_entries: env::var("AUTO_PAPER_MAX_DAILY_ENTRIES")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(DEFAULT_AUTO_PAPER_MAX_DAILY_ENTRIES)
+            .max(1),
+        max_daily_loss_percent: env::var("AUTO_PAPER_MAX_DAILY_LOSS_PERCENT")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(DEFAULT_AUTO_PAPER_MAX_DAILY_LOSS_PERCENT)
+            .max(0.1),
+    };
     let data_dir = env::var("DATA_DIR").unwrap_or_else(|_| "./data".to_string());
     let db_path = Path::new(&data_dir).join("tradebot.db");
 
@@ -552,7 +679,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         default_interval,
         paper_fee_bps: fee_bps,
         news_cache: Arc::new(Mutex::new(HashMap::new())),
+        auto_paper,
     };
+
+    if shared_state.auto_paper.enabled {
+        let auto_state = shared_state.clone();
+        tokio::spawn(async move {
+            auto_paper_worker(auto_state).await;
+        });
+    }
 
     let static_files =
         ServeDir::new("static").not_found_service(ServeFile::new("static/index.html"));
@@ -617,6 +752,7 @@ async fn get_dashboard(
     let signal_assistant = match build_signal_assistant(
         &state.client,
         &state.news_cache,
+        &state.watchlist,
         &symbol,
         current_price,
         paper.cash_balance,
@@ -833,6 +969,18 @@ fn parse_watchlist(raw: String) -> Vec<String> {
     symbols
 }
 
+fn env_bool(name: &str, default: bool) -> bool {
+    env::var(name)
+        .ok()
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(default)
+}
+
 fn pick_symbol(watchlist: &[String], requested: Option<String>) -> Result<String, ApiError> {
     let candidate = requested
         .unwrap_or_else(|| {
@@ -993,8 +1141,37 @@ fn initialize_database(
 
         CREATE INDEX IF NOT EXISTS idx_orders_status_created_at
             ON orders(status, created_at);
+
+        CREATE TABLE IF NOT EXISTS auto_paper_decisions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            strategy_version TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            signal_close_time INTEGER NOT NULL,
+            decision TEXT NOT NULL,
+            reason TEXT,
+            ai_score INTEGER,
+            stage TEXT,
+            created_at INTEGER NOT NULL,
+            trade_id INTEGER,
+            entry_price REAL,
+            stop_loss REAL,
+            take_profit REAL,
+            quantity REAL,
+            risk_per_unit REAL,
+            risk_amount REAL,
+            UNIQUE(strategy_version, symbol, signal_close_time)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_auto_paper_decisions_created_at
+            ON auto_paper_decisions(created_at);
         ",
     )?;
+    ensure_column(connection, "auto_paper_decisions", "entry_price", "REAL")?;
+    ensure_column(connection, "auto_paper_decisions", "stop_loss", "REAL")?;
+    ensure_column(connection, "auto_paper_decisions", "take_profit", "REAL")?;
+    ensure_column(connection, "auto_paper_decisions", "quantity", "REAL")?;
+    ensure_column(connection, "auto_paper_decisions", "risk_per_unit", "REAL")?;
+    ensure_column(connection, "auto_paper_decisions", "risk_amount", "REAL")?;
 
     let account_exists: Option<i64> = connection
         .query_row("SELECT id FROM account WHERE id = 1", [], |row| row.get(0))
@@ -1022,6 +1199,7 @@ fn reset_database(connection: &mut Connection) -> Result<(), ApiError> {
     tx.execute("DELETE FROM positions", [])?;
     tx.execute("DELETE FROM trades", [])?;
     tx.execute("DELETE FROM orders", [])?;
+    tx.execute("DELETE FROM auto_paper_decisions", [])?;
     tx.execute(
         "UPDATE account
          SET cash_balance = ?1, realized_pnl = 0.0, fee_bps = ?2
@@ -1030,6 +1208,24 @@ fn reset_database(connection: &mut Connection) -> Result<(), ApiError> {
     )?;
     tx.commit()?;
 
+    Ok(())
+}
+
+fn ensure_column(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+    definition: &str,
+) -> Result<(), ApiError> {
+    let mut statement = connection.prepare(&format!("PRAGMA table_info({table})"))?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+    let columns = rows.collect::<Result<Vec<_>, _>>()?;
+    if !columns.iter().any(|name| name == column) {
+        connection.execute(
+            &format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"),
+            [],
+        )?;
+    }
     Ok(())
 }
 
@@ -1307,6 +1503,342 @@ fn process_price_events(
 ) -> Result<(), ApiError> {
     process_open_orders(connection, prices, timestamp)?;
     process_position_triggers(connection, prices, timestamp)?;
+    Ok(())
+}
+
+async fn auto_paper_worker(state: AppState) {
+    println!(
+        "auto-paper worker enabled: strategy={}, interval={}s, max_open_slots={}, max_daily_entries={}, max_daily_loss={:.2}%",
+        ACTIVE_PAPER_STRATEGY_VERSION,
+        state.auto_paper.interval_seconds,
+        state.auto_paper.max_open_slots,
+        state.auto_paper.max_daily_entries,
+        state.auto_paper.max_daily_loss_percent
+    );
+
+    let mut ticker = tokio::time::interval(Duration::from_secs(state.auto_paper.interval_seconds));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    loop {
+        ticker.tick().await;
+        if let Err(error) = run_auto_paper_cycle(&state).await {
+            eprintln!("auto-paper cycle failed: {}", error.message);
+        }
+    }
+}
+
+async fn run_auto_paper_cycle(state: &AppState) -> Result<(), ApiError> {
+    if !state.auto_paper.enabled {
+        return Ok(());
+    }
+
+    let now = Utc::now().timestamp_millis();
+    let tickers = fetch_tickers(&state.client, &state.watchlist).await?;
+    let prices: HashMap<String, f64> = tickers
+        .iter()
+        .map(|ticker| (ticker.symbol.clone(), ticker.last_price))
+        .collect();
+
+    let mut stats = {
+        let mut db = state
+            .db
+            .lock()
+            .map_err(|_| ApiError::internal("Paper database lock is poisoned."))?;
+        process_price_events(&mut db, &prices, now)?;
+        load_auto_paper_cycle_stats(&db, now)?
+    };
+
+    if auto_paper_caps_blocked(&state.auto_paper, &stats) {
+        return Ok(());
+    }
+
+    for symbol in state
+        .watchlist
+        .iter()
+        .filter(|symbol| symbol.as_str() != BTC_REFERENCE_SYMBOL)
+    {
+        let Some(current_price) = prices.get(symbol).copied() else {
+            continue;
+        };
+
+        let signal = build_signal_assistant(
+            &state.client,
+            &state.news_cache,
+            &state.watchlist,
+            symbol,
+            current_price,
+            stats.cash_balance,
+            stats.fee_bps,
+            now,
+        )
+        .await?;
+
+        let Some(risk_plan) = signal.risk_plan.clone() else {
+            if matches!(signal.technical_stage, SignalStage::Ready) {
+                let db = state
+                    .db
+                    .lock()
+                    .map_err(|_| ApiError::internal("Paper database lock is poisoned."))?;
+                let reason = auto_paper_rejection_reason(&signal);
+                insert_auto_paper_decision(&db, &signal, "rejected", Some(&reason), now)?;
+            }
+            continue;
+        };
+
+        let entry_result = {
+            let mut db = state
+                .db
+                .lock()
+                .map_err(|_| ApiError::internal("Paper database lock is poisoned."))?;
+            process_price_events(&mut db, &prices, now)?;
+            stats = load_auto_paper_cycle_stats(&db, now)?;
+
+            if auto_paper_caps_blocked(&state.auto_paper, &stats) {
+                return Ok(());
+            }
+
+            if !insert_auto_paper_entry_attempt(&db, &signal, now)? {
+                continue;
+            }
+
+            let affordable_quantity =
+                max_affordable_quantity(stats.cash_balance, current_price, stats.fee_bps);
+            let quantity = risk_plan.suggested_quantity.min(affordable_quantity);
+            if quantity <= 0.0 || !quantity.is_finite() {
+                update_auto_paper_decision_failure(
+                    &db,
+                    &signal,
+                    "No affordable paper quantity at execution time.",
+                )?;
+                continue;
+            }
+
+            let note = Some(format!(
+                "AUTO_PAPER {} | signal_close={} | ai_score={} | {}",
+                signal.strategy_version,
+                format_utc_time(signal.signal_close_time),
+                signal.ai_score,
+                signal.summary
+            ));
+            let trade = execute_trade(
+                &mut db,
+                TradeExecution {
+                    symbol: symbol.clone(),
+                    side: OrderSide::Buy,
+                    quantity,
+                    price: current_price,
+                    note,
+                    source: "AUTO_PAPER_MARKET".to_string(),
+                    source_order_id: None,
+                    attached_stop_loss: Some(risk_plan.stop_loss),
+                    attached_take_profit: Some(risk_plan.take_profit_1),
+                    executed_at: now,
+                },
+            );
+
+            match trade {
+                Ok(trade) => {
+                    update_auto_paper_decision_trade(&db, &signal, &trade, &risk_plan)?;
+                    Ok(Some(trade))
+                }
+                Err(error) => {
+                    update_auto_paper_decision_failure(&db, &signal, &error.message)?;
+                    Err(error)
+                }
+            }
+        }?;
+
+        if let Some(trade) = entry_result {
+            println!(
+                "auto-paper entered {} qty {:.6} @ {:.4} using {}",
+                trade.symbol, trade.quantity, trade.price, ACTIVE_PAPER_STRATEGY_VERSION
+            );
+            break;
+        }
+    }
+
+    Ok(())
+}
+
+fn auto_paper_caps_blocked(config: &AutoPaperConfig, stats: &AutoPaperCycleStats) -> bool {
+    if stats.active_slots >= config.max_open_slots {
+        return true;
+    }
+    if stats.daily_entries >= config.max_daily_entries {
+        return true;
+    }
+    let max_daily_loss = stats.initial_cash * config.max_daily_loss_percent / 100.0;
+    stats.daily_realized_pnl <= -max_daily_loss
+}
+
+fn load_auto_paper_cycle_stats(
+    connection: &Connection,
+    now: i64,
+) -> Result<AutoPaperCycleStats, ApiError> {
+    let account = fetch_account(connection)?;
+    let day_start = utc_day_start_ms(now);
+    let open_positions: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM positions WHERE quantity > 0",
+        [],
+        |row| row.get(0),
+    )?;
+    let open_orders: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM orders WHERE status = 'OPEN'",
+        [],
+        |row| row.get(0),
+    )?;
+    let daily_entries: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM trades
+         WHERE source = 'AUTO_PAPER_MARKET' AND side = 'BUY' AND executed_at >= ?1",
+        params![day_start],
+        |row| row.get(0),
+    )?;
+    let daily_realized_pnl: f64 = connection.query_row(
+        "SELECT COALESCE(SUM(realized_pnl), 0.0) FROM trades
+         WHERE side = 'SELL' AND executed_at >= ?1",
+        params![day_start],
+        |row| row.get(0),
+    )?;
+
+    Ok(AutoPaperCycleStats {
+        active_slots: (open_positions + open_orders).max(0) as usize,
+        daily_entries: daily_entries.max(0) as usize,
+        daily_realized_pnl,
+        initial_cash: account.initial_cash,
+        cash_balance: account.cash_balance,
+        fee_bps: account.fee_bps,
+    })
+}
+
+fn insert_auto_paper_decision(
+    connection: &Connection,
+    signal: &SignalAssistant,
+    decision: &str,
+    reason: Option<&str>,
+    created_at: i64,
+) -> Result<bool, ApiError> {
+    let changed = connection.execute(
+        "INSERT OR IGNORE INTO auto_paper_decisions (
+            strategy_version, symbol, signal_close_time, decision, reason,
+            ai_score, stage, created_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            signal.strategy_version,
+            &signal.symbol,
+            signal.signal_close_time,
+            decision,
+            reason,
+            signal.ai_score,
+            signal.stage.as_label(),
+            created_at
+        ],
+    )?;
+    Ok(changed > 0)
+}
+
+fn insert_auto_paper_entry_attempt(
+    connection: &Connection,
+    signal: &SignalAssistant,
+    created_at: i64,
+) -> Result<bool, ApiError> {
+    if insert_auto_paper_decision(connection, signal, "entry_attempt", None, created_at)? {
+        return Ok(true);
+    }
+
+    let changed = connection.execute(
+        "UPDATE auto_paper_decisions
+         SET decision = 'entry_attempt',
+             reason = NULL,
+             ai_score = ?1,
+             stage = ?2,
+             created_at = ?3,
+             trade_id = NULL,
+             entry_price = NULL,
+             stop_loss = NULL,
+             take_profit = NULL,
+             quantity = NULL,
+             risk_per_unit = NULL,
+             risk_amount = NULL
+         WHERE strategy_version = ?4
+           AND symbol = ?5
+           AND signal_close_time = ?6
+           AND decision = 'rejected'",
+        params![
+            signal.ai_score,
+            signal.stage.as_label(),
+            created_at,
+            signal.strategy_version,
+            &signal.symbol,
+            signal.signal_close_time
+        ],
+    )?;
+    Ok(changed > 0)
+}
+
+fn auto_paper_rejection_reason(signal: &SignalAssistant) -> String {
+    let failed = signal
+        .checklist
+        .iter()
+        .filter(|check| !check.passed)
+        .map(|check| check.label.as_str())
+        .collect::<Vec<_>>();
+    if failed.is_empty() {
+        signal.summary.clone()
+    } else {
+        format!("{} Failed checks: {}.", signal.summary, failed.join(", "))
+    }
+}
+
+fn update_auto_paper_decision_trade(
+    connection: &Connection,
+    signal: &SignalAssistant,
+    trade: &Trade,
+    risk_plan: &SignalRiskPlan,
+) -> Result<(), ApiError> {
+    let risk_amount = trade.quantity * risk_plan.risk_per_unit;
+    connection.execute(
+        "UPDATE auto_paper_decisions
+         SET decision = 'entered',
+             trade_id = ?1,
+             entry_price = ?2,
+             stop_loss = ?3,
+             take_profit = ?4,
+             quantity = ?5,
+             risk_per_unit = ?6,
+             risk_amount = ?7
+         WHERE strategy_version = ?8 AND symbol = ?9 AND signal_close_time = ?10",
+        params![
+            trade.id,
+            trade.price,
+            risk_plan.stop_loss,
+            risk_plan.take_profit_1,
+            trade.quantity,
+            risk_plan.risk_per_unit,
+            risk_amount,
+            signal.strategy_version,
+            &signal.symbol,
+            signal.signal_close_time
+        ],
+    )?;
+    Ok(())
+}
+
+fn update_auto_paper_decision_failure(
+    connection: &Connection,
+    signal: &SignalAssistant,
+    reason: &str,
+) -> Result<(), ApiError> {
+    connection.execute(
+        "UPDATE auto_paper_decisions
+         SET decision = 'failed', reason = ?1
+         WHERE strategy_version = ?2 AND symbol = ?3 AND signal_close_time = ?4",
+        params![
+            reason,
+            signal.strategy_version,
+            &signal.symbol,
+            signal.signal_close_time
+        ],
+    )?;
     Ok(())
 }
 
@@ -1791,9 +2323,778 @@ async fn fetch_candles(
     Ok(candles)
 }
 
+async fn fetch_scorecard_context(
+    client: &Client,
+    symbol: &str,
+    watchlist: &[String],
+    signal_close_time: i64,
+    selected_trigger_closed: &[Candle],
+) -> ScorecardContext {
+    let mut context = ScorecardContext::empty();
+
+    match fetch_latest_funding_bps(client, symbol, signal_close_time).await {
+        Ok(funding_bps) => context.funding_bps = funding_bps,
+        Err(error) => context.warnings.push(format!(
+            "Funding scorecard podatek ni dosegljiv za {symbol}: {}.",
+            error.message
+        )),
+    }
+
+    match fetch_futures_metric_snapshot(client, symbol, signal_close_time).await {
+        Ok(metrics) => context.metrics = metrics,
+        Err(error) => context.warnings.push(format!(
+            "Futures positioning scorecard podatki niso dosegljivi za {symbol}: {}.",
+            error.message
+        )),
+    }
+
+    let (basket, mut basket_warnings) = build_basket_snapshot(
+        client,
+        symbol,
+        watchlist,
+        signal_close_time,
+        selected_trigger_closed,
+    )
+    .await;
+    context.basket = basket;
+    context.warnings.append(&mut basket_warnings);
+
+    context
+}
+
+async fn fetch_latest_funding_bps(
+    client: &Client,
+    symbol: &str,
+    signal_close_time: i64,
+) -> Result<Option<(f64, i64)>, ApiError> {
+    let lookback_ms = (ACTIVE_PAPER_STRATEGY_FUNDING_MAX_AGE_HOURS * 60.0 * 60.0 * 1000.0) as i64;
+    let start_time = signal_close_time.saturating_sub(lookback_ms);
+    let response = client
+        .get(format!("{BINANCE_FAPI_API}/fapi/v1/fundingRate"))
+        .query(&[
+            ("symbol", symbol.to_string()),
+            ("startTime", start_time.to_string()),
+            ("endTime", signal_close_time.to_string()),
+            ("limit", "1000".to_string()),
+        ])
+        .send()
+        .await
+        .map_err(|error| ApiError::upstream(format!("Failed to fetch funding rate: {error}")))?;
+
+    if !response.status().is_success() {
+        return Err(ApiError::upstream(format!(
+            "Funding request returned {} for {symbol}.",
+            response.status()
+        )));
+    }
+
+    let rows: Vec<BinanceFundingRate> = response.json().await.map_err(|error| {
+        ApiError::upstream(format!("Failed to decode funding payload: {error}"))
+    })?;
+
+    let mut latest: Option<(f64, i64)> = None;
+    for row in rows {
+        if row.symbol != symbol {
+            continue;
+        }
+        let funding_time = parse_json_i64(&row.funding_time)?;
+        if funding_time > signal_close_time {
+            continue;
+        }
+        let funding_bps = parse_f64(&row.funding_rate)? * 10_000.0;
+        if latest
+            .map(|(_, current_time)| funding_time > current_time)
+            .unwrap_or(true)
+        {
+            latest = Some((funding_bps, funding_time));
+        }
+    }
+
+    Ok(latest)
+}
+
+async fn fetch_futures_metric_snapshot(
+    client: &Client,
+    symbol: &str,
+    signal_close_time: i64,
+) -> Result<Option<FuturesMetricSnapshot>, ApiError> {
+    let (open_interest_rows, global_rows, top_position_rows, taker_rows) = tokio::try_join!(
+        fetch_open_interest_rows(client, symbol, 300),
+        fetch_futures_ratio_rows(
+            client,
+            "/futures/data/globalLongShortAccountRatio",
+            symbol,
+            30
+        ),
+        fetch_futures_ratio_rows(
+            client,
+            "/futures/data/topLongShortPositionRatio",
+            symbol,
+            30
+        ),
+        fetch_futures_ratio_rows(client, "/futures/data/takerlongshortRatio", symbol, 30),
+    )?;
+
+    let Some((current_oi_value, current_oi_time)) =
+        latest_open_interest_before(&open_interest_rows, signal_close_time)?
+    else {
+        return Ok(None);
+    };
+    let Some((global_ratio, global_time)) =
+        latest_long_short_ratio_before(&global_rows, signal_close_time)?
+    else {
+        return Ok(None);
+    };
+    let Some((top_position_ratio, top_position_time)) =
+        latest_long_short_ratio_before(&top_position_rows, signal_close_time)?
+    else {
+        return Ok(None);
+    };
+    let Some((taker_ratio, taker_time)) =
+        latest_taker_ratio_before(&taker_rows, signal_close_time)?
+    else {
+        return Ok(None);
+    };
+
+    let max_age_ms = (ACTIVE_PAPER_STRATEGY_METRICS_MAX_AGE_MINUTES * 60.0 * 1000.0) as i64;
+    for timestamp in [current_oi_time, global_time, top_position_time, taker_time] {
+        let age_ms = signal_close_time - timestamp;
+        if age_ms < 0 || age_ms > max_age_ms {
+            return Ok(None);
+        }
+    }
+
+    let previous_cutoff = signal_close_time - 24 * 60 * 60 * 1000;
+    let open_interest_24h_change_pct =
+        latest_open_interest_before(&open_interest_rows, previous_cutoff)?
+            .and_then(|(previous_oi_value, _)| pct_change(previous_oi_value, current_oi_value));
+    let timestamp = [current_oi_time, global_time, top_position_time, taker_time]
+        .into_iter()
+        .min()
+        .unwrap_or(signal_close_time);
+
+    Ok(Some(FuturesMetricSnapshot {
+        timestamp,
+        taker_buy_sell_ratio: taker_ratio,
+        global_account_long_short_ratio: global_ratio,
+        top_trader_position_long_short_ratio: top_position_ratio,
+        open_interest_24h_change_pct,
+    }))
+}
+
+async fn fetch_open_interest_rows(
+    client: &Client,
+    symbol: &str,
+    limit: usize,
+) -> Result<Vec<BinanceOpenInterestHist>, ApiError> {
+    let response = client
+        .get(format!("{BINANCE_FAPI_API}/futures/data/openInterestHist"))
+        .query(&[
+            ("symbol", symbol.to_string()),
+            ("period", "5m".to_string()),
+            ("limit", limit.to_string()),
+        ])
+        .send()
+        .await
+        .map_err(|error| {
+            ApiError::upstream(format!("Failed to fetch open-interest history: {error}"))
+        })?;
+
+    if !response.status().is_success() {
+        return Err(ApiError::upstream(format!(
+            "Open-interest history request returned {} for {symbol}.",
+            response.status()
+        )));
+    }
+
+    response.json().await.map_err(|error| {
+        ApiError::upstream(format!(
+            "Failed to decode open-interest history payload: {error}"
+        ))
+    })
+}
+
+async fn fetch_futures_ratio_rows(
+    client: &Client,
+    path: &str,
+    symbol: &str,
+    limit: usize,
+) -> Result<Vec<BinanceRatioRow>, ApiError> {
+    let response = client
+        .get(format!("{BINANCE_FAPI_API}{path}"))
+        .query(&[
+            ("symbol", symbol.to_string()),
+            ("period", "5m".to_string()),
+            ("limit", limit.to_string()),
+        ])
+        .send()
+        .await
+        .map_err(|error| ApiError::upstream(format!("Failed to fetch futures ratio: {error}")))?;
+
+    if !response.status().is_success() {
+        return Err(ApiError::upstream(format!(
+            "Futures ratio request returned {} for {symbol}.",
+            response.status()
+        )));
+    }
+
+    response.json().await.map_err(|error| {
+        ApiError::upstream(format!("Failed to decode futures ratio payload: {error}"))
+    })
+}
+
+async fn build_basket_snapshot(
+    client: &Client,
+    symbol: &str,
+    watchlist: &[String],
+    signal_close_time: i64,
+    selected_trigger_closed: &[Candle],
+) -> (Option<BasketSnapshot>, Vec<String>) {
+    let mut returns = Vec::new();
+    let mut warnings = Vec::new();
+
+    for basket_symbol in watchlist {
+        let return_pct = if basket_symbol == symbol {
+            trigger_return_pct(
+                selected_trigger_closed,
+                ACTIVE_PAPER_STRATEGY_BASKET_LOOKBACK_HOURS,
+            )
+        } else {
+            match fetch_candles(client, basket_symbol, "15m", 120).await {
+                Ok(candles) => {
+                    let closed = closed_candles_until(&candles, signal_close_time, "15m");
+                    trigger_return_pct(closed, ACTIVE_PAPER_STRATEGY_BASKET_LOOKBACK_HOURS)
+                }
+                Err(error) => {
+                    warnings.push(format!(
+                        "Basket scorecard je preskocil {basket_symbol}: {}.",
+                        error.message
+                    ));
+                    None
+                }
+            }
+        };
+
+        if let Some(value) = return_pct {
+            returns.push((basket_symbol.clone(), value));
+        }
+    }
+
+    if returns.is_empty() {
+        return (None, warnings);
+    }
+
+    let values: Vec<f64> = returns.iter().map(|(_, value)| *value).collect();
+    let positive_share_pct = Some(
+        values.iter().filter(|value| **value > 0.0).count() as f64 / values.len() as f64 * 100.0,
+    );
+    let relative_strength_percentile = returns
+        .iter()
+        .find(|(candidate_symbol, _)| candidate_symbol == symbol)
+        .and_then(|(_, current)| percentile_rank(&values, *current));
+
+    (
+        Some(BasketSnapshot {
+            relative_strength_percentile,
+            positive_share_pct,
+            sample_size: values.len(),
+        }),
+        warnings,
+    )
+}
+
+fn evaluate_ai_scorecard_v2(
+    symbol: &str,
+    signal_close_time: i64,
+    trigger_slice: &[Candle],
+    btc_trend_slice: &[Candle],
+    risk_plan: Option<&SignalRiskPlan>,
+    fee_bps: f64,
+    context: &ScorecardContext,
+) -> AiScorecardEvaluation {
+    let mut score = 0_i32;
+    let mut components = Vec::new();
+    let mut blockers = Vec::new();
+    let warnings = context.warnings.clone();
+
+    if symbol == BTC_REFERENCE_SYMBOL {
+        blockers.push("exclude_btc".to_string());
+        components.push(SignalCheck {
+            label: "Approved universe".to_string(),
+            passed: false,
+            detail: "Promoted candidate excludes BTC entries; BTC ostaja referencni trg."
+                .to_string(),
+        });
+    } else {
+        components.push(SignalCheck {
+            label: "Approved universe".to_string(),
+            passed: true,
+            detail: format!("{symbol} je dovoljen kot non-BTC paper kandidat."),
+        });
+    }
+
+    let Some(plan) = risk_plan else {
+        blockers.push("risk_plan".to_string());
+        components.push(SignalCheck {
+            label: "AI score v2".to_string(),
+            passed: false,
+            detail: format!(
+                "Score 0/{ACTIVE_PAPER_STRATEGY_MIN_SCORE}; scorecard se izracuna sele po veljavnem setup risk planu."
+            ),
+        });
+        return AiScorecardEvaluation {
+            score,
+            components,
+            blockers,
+            warnings,
+        };
+    };
+
+    let session = session_bucket(signal_close_time);
+    let session_points = match session {
+        "london_ny_overlap" => 2,
+        "london" => 1,
+        "new_york" => -2,
+        "off_hours" => -1,
+        _ => 0,
+    };
+    score += session_points;
+    components.push(SignalCheck {
+        label: "Score session".to_string(),
+        passed: session != "off_hours",
+        detail: format!("{session}: {session_points:+} point(s)."),
+    });
+
+    let fee_drag = estimated_round_trip_fee_r(plan, fee_bps);
+    let fee_points = if fee_drag <= 0.35 {
+        1
+    } else if fee_drag > ACTIVE_PAPER_STRATEGY_MAX_FEE_DRAG_R {
+        -2
+    } else {
+        0
+    };
+    score += fee_points;
+    if fee_drag > ACTIVE_PAPER_STRATEGY_MAX_FEE_DRAG_R {
+        blockers.push("fee_drag".to_string());
+    }
+    components.push(SignalCheck {
+        label: "Score fee drag".to_string(),
+        passed: fee_drag <= ACTIVE_PAPER_STRATEGY_MAX_FEE_DRAG_R,
+        detail: format!(
+            "{fee_drag:.2}R estimated round-trip fee drag; max gate {:.2}R; {fee_points:+} point(s).",
+            ACTIVE_PAPER_STRATEGY_MAX_FEE_DRAG_R
+        ),
+    });
+
+    let stop_pct = plan.risk_per_unit / plan.entry;
+    if stop_pct < ACTIVE_PAPER_STRATEGY_MIN_STOP_PCT {
+        blockers.push("stop_too_tight".to_string());
+    }
+    components.push(SignalCheck {
+        label: "Stop distance".to_string(),
+        passed: stop_pct >= ACTIVE_PAPER_STRATEGY_MIN_STOP_PCT,
+        detail: format!(
+            "Stop distance {:.2}% of entry; minimum gate {:.2}%.",
+            stop_pct * 100.0,
+            ACTIVE_PAPER_STRATEGY_MIN_STOP_PCT * 100.0
+        ),
+    });
+
+    let volume_rank = volume_percentile_rank(trigger_slice);
+    let volume_points = match volume_rank {
+        Some(rank) if (0.50..=0.90).contains(&rank) => 1,
+        Some(rank) if rank >= 0.90 || rank < 0.20 => -1,
+        _ => 0,
+    };
+    score += volume_points;
+    components.push(SignalCheck {
+        label: "Score volume".to_string(),
+        passed: volume_points >= 0,
+        detail: format!(
+            "15m volume percentile {}; {volume_points:+} point(s).",
+            format_optional_percentile(volume_rank)
+        ),
+    });
+
+    let atr_multiple = atr_expansion_multiple(trigger_slice);
+    let atr_points = match atr_multiple {
+        Some(value) if value <= 1.10 => 1,
+        Some(value) if value >= 1.50 => -1,
+        _ => 0,
+    };
+    score += atr_points;
+    components.push(SignalCheck {
+        label: "Score ATR expansion".to_string(),
+        passed: atr_points >= 0,
+        detail: format!(
+            "30-vs-90 ATR multiple {}; {atr_points:+} point(s).",
+            format_optional_number(atr_multiple, 2)
+        ),
+    });
+
+    let btc_24h = btc_return_pct(btc_trend_slice, 24.0);
+    let btc_points = match btc_24h {
+        Some(value) if (-5.0..=5.0).contains(&value) => 1,
+        Some(value) if value < -10.0 => -2,
+        Some(value) if value > 10.0 => -1,
+        _ => 0,
+    };
+    score += btc_points;
+    components.push(SignalCheck {
+        label: "Score BTC 24h".to_string(),
+        passed: btc_points >= 0,
+        detail: format!(
+            "BTC 24h return {}; {btc_points:+} point(s).",
+            format_optional_signed_percent(btc_24h)
+        ),
+    });
+
+    let relative_strength = context
+        .basket
+        .as_ref()
+        .and_then(|basket| basket.relative_strength_percentile);
+    let relative_points = match relative_strength {
+        Some(value) if value >= 0.60 => 2,
+        Some(value) if value <= 0.30 => -2,
+        _ => 0,
+    };
+    score += relative_points;
+    let basket_sample_size = context
+        .basket
+        .as_ref()
+        .map(|basket| basket.sample_size)
+        .unwrap_or(0);
+    components.push(SignalCheck {
+        label: "Score relative strength".to_string(),
+        passed: relative_points >= 0,
+        detail: format!(
+            "24h relative-strength percentile {} across {basket_sample_size} symbols; {relative_points:+} point(s).",
+            format_optional_percentile(relative_strength)
+        ),
+    });
+
+    let basket_share = context
+        .basket
+        .as_ref()
+        .and_then(|basket| basket.positive_share_pct);
+    let breadth_points = match basket_share {
+        Some(value) if value < 25.0 => -1,
+        Some(value) if value > 70.0 => 1,
+        _ => 0,
+    };
+    score += breadth_points;
+    components.push(SignalCheck {
+        label: "Score basket breadth".to_string(),
+        passed: breadth_points >= 0,
+        detail: format!(
+            "Positive 24h basket share {}; {breadth_points:+} point(s).",
+            format_optional_signed_percent(basket_share)
+        ),
+    });
+
+    let funding_points = match context.funding_bps {
+        Some((funding_bps, _)) if funding_bps >= -1.0 => 2,
+        Some((funding_bps, _)) if funding_bps >= -2.0 => 1,
+        Some((funding_bps, _)) if funding_bps < -5.0 => -3,
+        Some(_) => -2,
+        None => {
+            blockers.push("funding_data".to_string());
+            -2
+        }
+    };
+    score += funding_points;
+    components.push(SignalCheck {
+        label: "Score funding".to_string(),
+        passed: context.funding_bps.is_some() && funding_points >= 0,
+        detail: match context.funding_bps {
+            Some((funding_bps, funding_time)) => format!(
+                "Funding {funding_bps:.2} bps at {}; {funding_points:+} point(s).",
+                format_utc_time(funding_time)
+            ),
+            None => format!("Funding missing/stale; {funding_points:+} point(s)."),
+        },
+    });
+
+    match &context.metrics {
+        Some(metrics) => {
+            let taker_points = if metrics.taker_buy_sell_ratio >= 1.25 {
+                2
+            } else if metrics.taker_buy_sell_ratio < 1.0 {
+                -1
+            } else {
+                0
+            };
+            score += taker_points;
+            components.push(SignalCheck {
+                label: "Score taker pressure".to_string(),
+                passed: taker_points >= 0,
+                detail: format!(
+                    "Taker buy/sell {:.2}; {taker_points:+} point(s).",
+                    metrics.taker_buy_sell_ratio
+                ),
+            });
+
+            let oi_points = match metrics.open_interest_24h_change_pct {
+                Some(value) if (-10.0..=0.0).contains(&value) => 1,
+                Some(value) if value > 2.0 || value < -15.0 => -1,
+                _ => 0,
+            };
+            score += oi_points;
+            components.push(SignalCheck {
+                label: "Score OI change".to_string(),
+                passed: oi_points >= 0,
+                detail: format!(
+                    "OI 24h change {}; {oi_points:+} point(s).",
+                    format_optional_signed_percent(metrics.open_interest_24h_change_pct)
+                ),
+            });
+
+            let global_points = if metrics.global_account_long_short_ratio <= 1.20 {
+                2
+            } else if metrics.global_account_long_short_ratio >= 2.00 {
+                -2
+            } else {
+                0
+            };
+            score += global_points;
+            components.push(SignalCheck {
+                label: "Score global bias".to_string(),
+                passed: global_points >= 0,
+                detail: format!(
+                    "Global account long/short {:.2}; {global_points:+} point(s).",
+                    metrics.global_account_long_short_ratio
+                ),
+            });
+
+            let top_position_points = if metrics.top_trader_position_long_short_ratio <= 1.40 {
+                1
+            } else if metrics.top_trader_position_long_short_ratio >= 2.00 {
+                -1
+            } else {
+                0
+            };
+            score += top_position_points;
+            components.push(SignalCheck {
+                label: "Score top position".to_string(),
+                passed: top_position_points >= 0,
+                detail: format!(
+                    "Top-trader position long/short {:.2} at {}; {top_position_points:+} point(s).",
+                    metrics.top_trader_position_long_short_ratio,
+                    format_utc_time(metrics.timestamp)
+                ),
+            });
+        }
+        None => {
+            blockers.push("metrics_data".to_string());
+            score -= 2;
+            components.push(SignalCheck {
+                label: "Score futures metrics".to_string(),
+                passed: false,
+                detail: "Futures 5m positioning metrics missing/stale; -2 point(s).".to_string(),
+            });
+        }
+    }
+
+    if score < ACTIVE_PAPER_STRATEGY_MIN_SCORE {
+        blockers.push("score_below_7".to_string());
+    }
+    components.push(SignalCheck {
+        label: "AI score v2".to_string(),
+        passed: score >= ACTIVE_PAPER_STRATEGY_MIN_SCORE,
+        detail: format!(
+            "Score {score}/{ACTIVE_PAPER_STRATEGY_MIN_SCORE}; paper gate requires >= {ACTIVE_PAPER_STRATEGY_MIN_SCORE}."
+        ),
+    });
+
+    AiScorecardEvaluation {
+        score,
+        components,
+        blockers,
+        warnings,
+    }
+}
+
+fn latest_open_interest_before(
+    rows: &[BinanceOpenInterestHist],
+    cutoff_time: i64,
+) -> Result<Option<(f64, i64)>, ApiError> {
+    let mut latest: Option<(f64, i64)> = None;
+    for row in rows {
+        let timestamp = parse_json_i64(&row.timestamp)?;
+        if timestamp > cutoff_time {
+            continue;
+        }
+        let value = parse_f64(&row.sum_open_interest_value)?;
+        if latest
+            .map(|(_, current_time)| timestamp > current_time)
+            .unwrap_or(true)
+        {
+            latest = Some((value, timestamp));
+        }
+    }
+    Ok(latest)
+}
+
+fn latest_long_short_ratio_before(
+    rows: &[BinanceRatioRow],
+    cutoff_time: i64,
+) -> Result<Option<(f64, i64)>, ApiError> {
+    latest_ratio_before(rows, cutoff_time, |row| row.long_short_ratio.as_deref())
+}
+
+fn latest_taker_ratio_before(
+    rows: &[BinanceRatioRow],
+    cutoff_time: i64,
+) -> Result<Option<(f64, i64)>, ApiError> {
+    latest_ratio_before(rows, cutoff_time, |row| row.buy_sell_ratio.as_deref())
+}
+
+fn latest_ratio_before(
+    rows: &[BinanceRatioRow],
+    cutoff_time: i64,
+    value_of: impl Fn(&BinanceRatioRow) -> Option<&str>,
+) -> Result<Option<(f64, i64)>, ApiError> {
+    let mut latest: Option<(f64, i64)> = None;
+    for row in rows {
+        let Some(raw_value) = value_of(row) else {
+            continue;
+        };
+        let timestamp = parse_json_i64(&row.timestamp)?;
+        if timestamp > cutoff_time {
+            continue;
+        }
+        let value = parse_f64(raw_value)?;
+        if latest
+            .map(|(_, current_time)| timestamp > current_time)
+            .unwrap_or(true)
+        {
+            latest = Some((value, timestamp));
+        }
+    }
+    Ok(latest)
+}
+
+fn volume_percentile_rank(trigger_slice: &[Candle]) -> Option<f64> {
+    if trigger_slice.len() < 100 {
+        return None;
+    }
+    let lookback = &trigger_slice[trigger_slice.len() - 97..trigger_slice.len() - 1];
+    percentile_rank(
+        &lookback
+            .iter()
+            .map(|candle| candle.volume)
+            .collect::<Vec<_>>(),
+        trigger_slice.last()?.volume,
+    )
+}
+
+fn atr_expansion_multiple(trigger_slice: &[Candle]) -> Option<f64> {
+    if trigger_slice.len() < 120 {
+        return None;
+    }
+    let recent_atr = calculate_atr(&trigger_slice[trigger_slice.len() - 30..], 14)?;
+    let baseline_atr = calculate_atr(
+        &trigger_slice[trigger_slice.len() - 120..trigger_slice.len() - 30],
+        14,
+    )?;
+    if baseline_atr <= 0.0 {
+        return None;
+    }
+    Some(recent_atr / baseline_atr)
+}
+
+fn btc_return_pct(btc_trend_slice: &[Candle], lookback_hours: f64) -> Option<f64> {
+    let lookback_candles = (lookback_hours / 4.0).round().max(1.0) as usize;
+    close_return_pct(btc_trend_slice, lookback_candles)
+}
+
+fn trigger_return_pct(candles: &[Candle], lookback_hours: f64) -> Option<f64> {
+    let lookback_candles = (lookback_hours * 4.0).round().max(1.0) as usize;
+    close_return_pct(candles, lookback_candles)
+}
+
+fn close_return_pct(candles: &[Candle], lookback_candles: usize) -> Option<f64> {
+    if lookback_candles == 0 || candles.len() <= lookback_candles {
+        return None;
+    }
+    let start = candles.get(candles.len() - lookback_candles - 1)?.close;
+    let end = candles.last()?.close;
+    pct_change(start, end)
+}
+
+fn pct_change(start: f64, end: f64) -> Option<f64> {
+    if start == 0.0 || !start.is_finite() || !end.is_finite() {
+        return None;
+    }
+    Some((end - start) / start * 100.0)
+}
+
+fn percentile_rank(values: &[f64], current: f64) -> Option<f64> {
+    if values.is_empty() || !current.is_finite() {
+        return None;
+    }
+    Some(values.iter().filter(|value| **value <= current).count() as f64 / values.len() as f64)
+}
+
+fn estimated_round_trip_fee_r(risk_plan: &SignalRiskPlan, fee_bps: f64) -> f64 {
+    if risk_plan.risk_amount <= 0.0 {
+        return 0.0;
+    }
+    let entry_fee = risk_plan.notional_estimate * fee_bps / 10_000.0;
+    let estimated_exit_fee = risk_plan.suggested_quantity * risk_plan.entry * fee_bps / 10_000.0;
+    (entry_fee + estimated_exit_fee) / risk_plan.risk_amount
+}
+
+fn session_bucket(timestamp_ms: i64) -> &'static str {
+    let Some(timestamp) = DateTime::<Utc>::from_timestamp_millis(timestamp_ms) else {
+        return "unknown";
+    };
+    match timestamp.hour() {
+        7..=11 => "london",
+        12..=15 => "london_ny_overlap",
+        16..=21 => "new_york",
+        _ => "off_hours",
+    }
+}
+
+fn format_optional_number(value: Option<f64>, digits: usize) -> String {
+    match value {
+        Some(value) if value.is_finite() => format!("{value:.precision$}", precision = digits),
+        _ => "n/a".to_string(),
+    }
+}
+
+fn format_optional_percentile(value: Option<f64>) -> String {
+    match value {
+        Some(value) if value.is_finite() => format!("{:.0}%", value * 100.0),
+        _ => "n/a".to_string(),
+    }
+}
+
+fn format_optional_signed_percent(value: Option<f64>) -> String {
+    match value {
+        Some(value) if value.is_finite() => format!("{value:+.2}%"),
+        _ => "n/a".to_string(),
+    }
+}
+
+fn format_utc_time(timestamp_ms: i64) -> String {
+    DateTime::<Utc>::from_timestamp_millis(timestamp_ms)
+        .map(|timestamp| timestamp.format("%H:%M UTC").to_string())
+        .unwrap_or_else(|| "unknown UTC".to_string())
+}
+
+fn utc_day_start_ms(timestamp_ms: i64) -> i64 {
+    DateTime::<Utc>::from_timestamp_millis(timestamp_ms)
+        .and_then(|timestamp| timestamp.date_naive().and_hms_opt(0, 0, 0))
+        .map(|timestamp| timestamp.and_utc().timestamp_millis())
+        .unwrap_or(timestamp_ms)
+}
+
 async fn build_signal_assistant(
     client: &Client,
     news_cache: &Arc<Mutex<HashMap<String, CachedNewsStatus>>>,
+    watchlist: &[String],
     symbol: &str,
     current_price: f64,
     available_cash: f64,
@@ -1816,61 +3117,120 @@ async fn build_signal_assistant(
         setup_closed,
         trigger_closed,
     );
+    let signal_close_time = trigger_closed
+        .last()
+        .map(|candle| candle.open_time + interval_millis("15m"))
+        .unwrap_or(generated_at);
     let stalk_ok = matches!(
         evaluation.stage,
         SignalStage::Stalk | SignalStage::Setup | SignalStage::Ready
     );
     let setup_ok = matches!(evaluation.stage, SignalStage::Setup | SignalStage::Ready);
     let trigger_ok = matches!(evaluation.stage, SignalStage::Ready);
-    let session_filter = evaluate_session_filter(generated_at);
-    let correlation_filter = if symbol == BTC_REFERENCE_SYMBOL {
-        CorrelationFilterStatus {
-            passed: true,
-            detail: "BTC je referencni trg, zato se BTC-vs-BTC correlation gate preskoci."
-                .to_string(),
-        }
+    let session_filter = evaluate_session_filter(signal_close_time);
+    let mut btc_warning = None;
+    let (btc_trend_candles, btc_trigger_candles) = if symbol == BTC_REFERENCE_SYMBOL {
+        (Vec::new(), Vec::new())
     } else {
         match tokio::try_join!(
             fetch_candles(client, BTC_REFERENCE_SYMBOL, "4h", 160),
             fetch_candles(client, BTC_REFERENCE_SYMBOL, "15m", 160),
         ) {
-            Ok((btc_trend_candles, btc_trigger_candles)) => evaluate_correlation_filter(
-                symbol,
-                trigger_closed,
-                closed_candles_until(&btc_trend_candles, generated_at, "4h"),
-                closed_candles_until(&btc_trigger_candles, generated_at, "15m"),
-            ),
-            Err(error) => CorrelationFilterStatus {
-                passed: false,
-                detail: format!(
-                    "BTC correlation gate ni preverjen, ker BTC podatki niso bili dosegljivi: {}.",
+            Ok(candles) => candles,
+            Err(error) => {
+                btc_warning = Some(format!(
+                    "BTC kontekst ni preverjen, ker BTC podatki niso bili dosegljivi: {}.",
                     error.message
-                ),
-            },
+                ));
+                (Vec::new(), Vec::new())
+            }
         }
     };
+    let btc_trend_closed = if symbol == BTC_REFERENCE_SYMBOL {
+        trend_closed
+    } else {
+        closed_candles_until(&btc_trend_candles, signal_close_time, "4h")
+    };
+    let btc_trigger_closed = if symbol == BTC_REFERENCE_SYMBOL {
+        trigger_closed
+    } else {
+        closed_candles_until(&btc_trigger_candles, signal_close_time, "15m")
+    };
+    let correlation_filter = if symbol == BTC_REFERENCE_SYMBOL {
+        CorrelationFilterStatus {
+            passed: true,
+            detail:
+                "BTC je referencni trg. Promoted scorecard BTC korelacije ne uporablja kot gate."
+                    .to_string(),
+        }
+    } else if btc_warning.is_some() {
+        CorrelationFilterStatus {
+            passed: true,
+            detail:
+                "BTC correlation je samo diagnostika za promoted scorecard in trenutno ni na voljo."
+                    .to_string(),
+        }
+    } else {
+        let mut status = evaluate_correlation_filter(
+            symbol,
+            trigger_closed,
+            btc_trend_closed,
+            btc_trigger_closed,
+        );
+        status.detail = format!(
+            "{} Promoted scorecard tega ne uporablja kot entry gate.",
+            status.detail
+        );
+        status.passed = true;
+        status
+    };
     let news_filter = evaluate_news_filter(client, news_cache, symbol, generated_at).await;
-    let filter_blockers =
-        collect_filter_blockers(&session_filter, &correlation_filter, &news_filter);
-    let stage = if matches!(evaluation.stage, SignalStage::Ready) && !filter_blockers.is_empty() {
+    let mut scorecard_context = if evaluation.risk_plan.is_some() && symbol != BTC_REFERENCE_SYMBOL
+    {
+        fetch_scorecard_context(client, symbol, watchlist, signal_close_time, trigger_closed).await
+    } else {
+        ScorecardContext::empty()
+    };
+    if let Some(warning) = btc_warning {
+        scorecard_context.warnings.push(warning);
+    }
+    let scorecard = evaluate_ai_scorecard_v2(
+        symbol,
+        signal_close_time,
+        trigger_closed,
+        btc_trend_closed,
+        evaluation.risk_plan.as_ref(),
+        fee_bps,
+        &scorecard_context,
+    );
+    let filter_blockers = collect_filter_blockers(&session_filter, &news_filter, &scorecard);
+    let paper_ready = matches!(evaluation.stage, SignalStage::Ready) && filter_blockers.is_empty();
+    let stage = if matches!(evaluation.stage, SignalStage::Ready) && !paper_ready {
         SignalStage::Setup
     } else {
         evaluation.stage
     };
     let risk_detail = format_risk_detail(evaluation.risk_plan.as_ref());
-    let journal_tags = build_journal_tags(evaluation.bias, evaluation.stage, &filter_blockers);
+    let journal_tags =
+        build_journal_tags(evaluation.bias, stage, scorecard.score, &filter_blockers);
 
     let mut warnings = vec![
-        "Session gate odpira nove long entryje samo med 07:00 in 22:00 UTC.".to_string(),
-        "News gate uporablja javne BEA/Fed/SEC/CoinDesk vire brez prijave; to je blackout filter, ne popoln event calendar."
+        format!(
+            "Paper testing je odobren samo za {ACTIVE_PAPER_STRATEGY_VERSION}; auto-paper uporablja en globalni slot in lokalne SQLite paper fille."
+        ),
+        "Risk plan uporablja 1% razpolozljivega paper casha na entry.".to_string(),
+        "Scorecard zahteva sveze javne Binance USD-M funding/positioning podatke; manjkajoci ali zastareli podatki blokirajo entry."
+            .to_string(),
+        "News gate uporablja javne BEA/Fed/SEC/CoinDesk vire brez prijave kot dodaten live-only blackout filter."
             .to_string(),
     ];
     if !filter_blockers.is_empty() && matches!(evaluation.stage, SignalStage::Ready) {
         warnings.push(format!(
-            "Tehnicni setup je READY, vendar je entry blokiran: {}.",
+            "Tehnicni setup je READY, vendar promoted paper gate blokira entry: {}.",
             filter_blockers.join(", ")
         ));
     }
+    warnings.extend(scorecard.warnings.iter().cloned());
     warnings.extend(news_filter.warnings.iter().cloned());
     if available_cash <= 0.0 {
         warnings.push("Na paper racunu ni prostega casha za novo pozicijo.".to_string());
@@ -1888,7 +3248,7 @@ async fn build_signal_assistant(
         );
     }
 
-    let checklist = vec![
+    let mut checklist = vec![
         SignalCheck {
             label: "4h trend".to_string(),
             passed: matches!(evaluation.bias, SignalBias::Bullish),
@@ -1933,12 +3293,13 @@ async fn build_signal_assistant(
             passed: news_filter.passed,
             detail: news_filter.detail.clone(),
         },
-        SignalCheck {
-            label: "Risk plan".to_string(),
-            passed: evaluation.risk_plan.is_some(),
-            detail: risk_detail,
-        },
     ];
+    checklist.extend(scorecard.components);
+    checklist.push(SignalCheck {
+        label: "Risk plan".to_string(),
+        passed: evaluation.risk_plan.is_some(),
+        detail: risk_detail,
+    });
 
     let summary = build_signal_summary(
         symbol,
@@ -1947,24 +3308,28 @@ async fn build_signal_assistant(
         stage,
         evaluation.support_level,
         &evaluation.trigger,
+        scorecard.score,
         &filter_blockers,
     );
 
     Ok(SignalAssistant {
         symbol: symbol.to_string(),
-        strategy_version: "v2_reclaim_strategy",
+        strategy_version: ACTIVE_PAPER_STRATEGY_VERSION,
         bias: evaluation.bias,
         stage,
+        technical_stage: evaluation.stage,
         confidence: evaluation.confidence,
+        ai_score: scorecard.score,
         summary,
         generated_at,
+        signal_close_time,
         timeframes: SignalTimeframes {
             trend: "4h",
             setup: "1h",
-            trigger: "15m",
+            trigger: "15m + USD-M 5m",
         },
         checklist,
-        risk_plan: if matches!(stage, SignalStage::Ready) {
+        risk_plan: if paper_ready {
             evaluation.risk_plan
         } else {
             None
@@ -2150,19 +3515,17 @@ async fn build_signal_replay(
 
 fn collect_filter_blockers(
     session_filter: &SessionFilterStatus,
-    correlation_filter: &CorrelationFilterStatus,
     news_filter: &NewsFilterStatus,
+    scorecard: &AiScorecardEvaluation,
 ) -> Vec<String> {
     let mut blockers = Vec::new();
     if !session_filter.passed {
         blockers.push("session".to_string());
     }
-    if !correlation_filter.passed {
-        blockers.push("correlation".to_string());
-    }
     if !news_filter.passed {
         blockers.push("news".to_string());
     }
+    blockers.extend(scorecard.blockers.iter().cloned());
     blockers
 }
 
@@ -2816,16 +4179,19 @@ fn unavailable_signal_assistant(
 ) -> SignalAssistant {
     SignalAssistant {
         symbol: symbol.to_string(),
-        strategy_version: "v2_reclaim_strategy",
+        strategy_version: ACTIVE_PAPER_STRATEGY_VERSION,
         bias: SignalBias::Neutral,
         stage: SignalStage::Wait,
+        technical_stage: SignalStage::Wait,
         confidence: 0,
+        ai_score: 0,
         summary: "Signal assistant trenutno ni na voljo.".to_string(),
         generated_at,
+        signal_close_time: generated_at,
         timeframes: SignalTimeframes {
             trend: "4h",
             setup: "1h",
-            trigger: "15m",
+            trigger: "15m + USD-M 5m",
         },
         checklist: Vec::new(),
         risk_plan: None,
@@ -3245,20 +4611,21 @@ fn build_signal_summary(
     displayed_stage: SignalStage,
     support_level: Option<f64>,
     trigger: &TriggerSnapshot,
+    ai_score: i32,
     filter_blockers: &[String],
 ) -> String {
     if matches!(technical_stage, SignalStage::Ready)
         && !matches!(displayed_stage, SignalStage::Ready)
     {
         return format!(
-            "{symbol} ima tehnicno pripravljen long setup, vendar je entry trenutno blokiran: {}.",
+            "{symbol} ima tehnicno pripravljen long setup, vendar {ACTIVE_PAPER_STRATEGY_VERSION} blokira paper entry: {}. Trenutni AI score je {ai_score}.",
             filter_blockers.join(", ")
         );
     }
 
     match displayed_stage {
         SignalStage::Ready => format!(
-            "{symbol} ima bullish 4h trend, zaprt 1h reclaim nad supportom {:.4} in 15m momentum close po reclaimu. Setup je pripravljen za paper long spremljanje.",
+            "{symbol} ima bullish 4h trend, zaprt 1h reclaim nad supportom {:.4}, 15m momentum close in AI score {ai_score}. Setup je odobren za rocni paper long.",
             support_level.unwrap_or_default()
         ),
         SignalStage::Setup => format!(
@@ -3287,12 +4654,14 @@ fn build_signal_summary(
 fn build_journal_tags(
     bias: SignalBias,
     stage: SignalStage,
+    ai_score: i32,
     filter_blockers: &[String],
 ) -> Vec<String> {
     let mut tags = vec![
-        "v2_reclaim_strategy".to_string(),
+        ACTIVE_PAPER_STRATEGY_VERSION.to_string(),
         format!("stage_{}", stage.as_label().to_ascii_lowercase()),
         format!("bias_{}", bias.as_label()),
+        format!("ai_score_{ai_score}"),
     ];
     tags.extend(
         filter_blockers
@@ -3342,6 +4711,20 @@ fn parse_json_f64(value: &serde_json::Value) -> Result<f64, ApiError> {
             .ok_or_else(|| ApiError::upstream("Exchange number is out of range.")),
         _ => Err(ApiError::upstream(
             "Exchange returned an invalid numeric field.",
+        )),
+    }
+}
+
+fn parse_json_i64(value: &serde_json::Value) -> Result<i64, ApiError> {
+    match value {
+        serde_json::Value::String(raw) => raw.parse::<i64>().map_err(|error| {
+            ApiError::upstream(format!("Failed to parse exchange integer: {error}"))
+        }),
+        serde_json::Value::Number(number) => number
+            .as_i64()
+            .ok_or_else(|| ApiError::upstream("Exchange integer is out of range.")),
+        _ => Err(ApiError::upstream(
+            "Exchange returned an invalid integer field.",
         )),
     }
 }

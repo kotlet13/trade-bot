@@ -41,6 +41,34 @@ MAX_PROMOTION_DRAWDOWN_R = 10.0
 MAX_SYMBOL_CONCENTRATION = 0.40
 MAX_SINGLE_TRADE_CONCENTRATION = 0.25
 LOG_PATH = Path("tmp/strategy_test_log.md")
+AI_SCORECARD_V2_SCORING_COMPONENTS = (
+    "session",
+    "fee",
+    "volume",
+    "atr",
+    "btc",
+    "relative_strength",
+    "breadth",
+    "funding",
+    "metrics_missing",
+    "taker",
+    "oi",
+    "global_bias",
+    "top_position",
+)
+AI_SCORECARD_V2_ABLATION_COMPONENTS = tuple(
+    component for component in AI_SCORECARD_V2_SCORING_COMPONENTS if component != "metrics_missing"
+)
+AI_SCORECARD_V2_COMPONENT_ALIASES = {
+    "rs": "relative_strength",
+    "relative": "relative_strength",
+    "basket": "breadth",
+    "market_breadth": "breadth",
+    "global": "global_bias",
+    "top_trader": "top_position",
+    "top_trader_position": "top_position",
+    "positioning": "top_position",
+}
 
 STABLE_OR_FIAT_BASES = {
     "USDC",
@@ -148,6 +176,17 @@ STRICT_EXCLUDED_BASES = {
     "TURBO",
     "WIF",
 }
+_ROW_TIME_CACHE: dict[tuple[int, str, int], tuple[int, ...]] = {}
+
+
+def row_times(rows: list[Any], attribute: str) -> tuple[int, ...]:
+    key = (id(rows), attribute, len(rows))
+    cached = _ROW_TIME_CACHE.get(key)
+    if cached is not None:
+        return cached
+    values = tuple(int(getattr(row, attribute)) for row in rows)
+    _ROW_TIME_CACHE[key] = values
+    return values
 
 
 @dataclass(frozen=True)
@@ -206,6 +245,7 @@ class TradeRecord:
     bars_held: int
     fees_paid: float
     session_bucket: str
+    diagnostics: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -465,6 +505,122 @@ def percentile(values: list[float], percentile_value: float) -> float | None:
     return ordered[max(0, min(index, len(ordered) - 1))]
 
 
+def rounded(value: float | None, digits: int = 4) -> float | None:
+    if value is None or not math.isfinite(value):
+        return None
+    return round(value, digits)
+
+
+def ai_scorecard_disabled_components(candidate: CandidateSpec) -> set[str]:
+    raw = candidate.params.get("ablate_ai_components")
+    if raw is None:
+        return set()
+    disabled: set[str] = set()
+    for token in re.split(r"[,\s]+", str(raw).strip().lower()):
+        if not token:
+            continue
+        component = AI_SCORECARD_V2_COMPONENT_ALIASES.get(token, token)
+        if component == "all":
+            return set(AI_SCORECARD_V2_SCORING_COMPONENTS)
+        disabled.add(component)
+    return disabled
+
+
+def ai_scorecard_component_points(
+    components: dict[str, Any],
+    disabled_components: set[str],
+    component: str,
+    points_key: str,
+    raw_points: int,
+) -> int:
+    active_points = 0 if component in disabled_components else raw_points
+    components[points_key] = active_points
+    if component in disabled_components:
+        components[f"{component}_raw_points"] = raw_points
+        components[f"{component}_ablated"] = True
+    return active_points
+
+
+def percentile_rank(values: list[float], current: float) -> float | None:
+    if not values:
+        return None
+    return sum(1 for value in values if value <= current) / len(values)
+
+
+def volume_percentile_rank(trigger_slice: list[study.Candle]) -> float | None:
+    if len(trigger_slice) < 100:
+        return None
+    return percentile_rank([candle.volume for candle in trigger_slice[-97:-1]], trigger_slice[-1].volume)
+
+
+def atr_expansion_multiple(trigger_slice: list[study.Candle]) -> float | None:
+    if len(trigger_slice) < 120:
+        return None
+    recent_atr = study.calculate_atr(trigger_slice[-30:], 14)
+    baseline_atr = study.calculate_atr(trigger_slice[-120:-30], 14)
+    if recent_atr is None or baseline_atr is None or baseline_atr <= 0.0:
+        return None
+    return recent_atr / baseline_atr
+
+
+def close_return_pct(candles: list[study.Candle], lookback_candles: int) -> float | None:
+    if lookback_candles <= 0 or len(candles) <= lookback_candles:
+        return None
+    return derivatives_data.pct_change(candles[-lookback_candles - 1].close, candles[-1].close)
+
+
+def btc_return_pct(btc_trend_slice: list[study.Candle], lookback_hours: float = 24.0) -> float | None:
+    lookback_candles = max(1, int(round(lookback_hours / 4.0)))
+    return close_return_pct(btc_trend_slice, lookback_candles)
+
+
+def trigger_return_pct(data: MarketData, signal_close_time: int, lookback_hours: float) -> float | None:
+    lookback_candles = max(1, int(round(lookback_hours * 4.0)))
+    cutoff = signal_close_time - study.interval_millis("15m")
+    end_index = bisect.bisect_right(data.trigger_open_times, cutoff) - 1
+    start_index = end_index - lookback_candles
+    if start_index < 0 or end_index < 0:
+        return None
+    return derivatives_data.pct_change(data.trigger[start_index].close, data.trigger[end_index].close)
+
+
+def basket_return_values(
+    market_data: dict[str, MarketData],
+    signal_close_time: int,
+    lookback_hours: float,
+) -> dict[str, float]:
+    values: dict[str, float] = {}
+    for symbol, data in market_data.items():
+        value = trigger_return_pct(data, signal_close_time, lookback_hours)
+        if value is not None:
+            values[symbol] = value
+    return values
+
+
+def basket_positive_share_pct(
+    market_data: dict[str, MarketData],
+    signal_close_time: int,
+    lookback_hours: float = 24.0,
+) -> float | None:
+    values = list(basket_return_values(market_data, signal_close_time, lookback_hours).values())
+    if not values:
+        return None
+    return sum(1 for value in values if value > 0.0) / len(values) * 100.0
+
+
+def relative_strength_percentile(
+    symbol: str,
+    market_data: dict[str, MarketData],
+    signal_close_time: int,
+    lookback_hours: float = 24.0,
+) -> float | None:
+    values = basket_return_values(market_data, signal_close_time, lookback_hours)
+    current = values.get(symbol)
+    if current is None:
+        return None
+    return percentile_rank(list(values.values()), current)
+
+
 def session_bucket(timestamp_ms: int) -> str:
     hour = time.gmtime(timestamp_ms / 1000).tm_hour
     if 7 <= hour < 12:
@@ -619,6 +775,38 @@ def build_candidates() -> list[CandidateSpec]:
         "min_stop_pct": 0.004,
         "max_fee_drag_r": 0.45,
         "exclude_btc": True,
+    }
+    ai_score_common = {
+        "max_bars": 16,
+        "min_stop_pct": 0.004,
+        "max_fee_drag_r": 0.45,
+        "exclude_btc": True,
+        "use_ai_scorecard": True,
+        "require_funding_data": True,
+        "max_funding_age_hours": 12,
+        "require_metrics_data": True,
+        "max_metrics_age_minutes": 20,
+    }
+    risk_off_relief_common = {
+        "max_bars": 8,
+        "target_multiple": 1.2,
+        "min_stop_pct": 0.004,
+        "max_fee_drag_r": 0.45,
+        "exclude_btc": True,
+        "btc_return_lookback_hours": 24,
+        "max_btc_return_pct": -1.0,
+        "basket_breadth_lookback_hours": 24,
+        "max_basket_positive_share_pct": 40.0,
+        "relative_strength_lookback_hours": 24,
+        "min_relative_strength_percentile": 0.50,
+        "min_funding_bps": -5.0,
+        "max_funding_age_hours": 12,
+        "min_metrics_oi_24h_change_pct": -15.0,
+        "max_metrics_oi_24h_change_pct": 2.0,
+        "max_metrics_age_minutes": 20,
+        "min_flush_atr": 1.35,
+        "min_close_location": 0.60,
+        "stop_atr_mult": 0.45,
     }
 
     return [
@@ -2017,6 +2205,165 @@ def build_candidates() -> list[CandidateSpec]:
             },
         ),
         CandidateSpec(
+            "ai_score_v2_base_score5",
+            "ai_scorecard_v2",
+            "v2_reclaim",
+            base,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={**ai_score_common, "min_ai_score": 5},
+        ),
+        CandidateSpec(
+            "ai_score_v2_base_score7",
+            "ai_scorecard_v2",
+            "v2_reclaim",
+            base,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={**ai_score_common, "min_ai_score": 7},
+        ),
+        CandidateSpec(
+            "ai_score_v2_moderate_score5",
+            "ai_scorecard_v2",
+            "v2_reclaim",
+            moderate_1h,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={**ai_score_common, "min_ai_score": 5},
+        ),
+        CandidateSpec(
+            "ai_score_v2_moderate_score7",
+            "ai_scorecard_v2",
+            "v2_reclaim",
+            moderate_1h,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={**ai_score_common, "min_ai_score": 7},
+        ),
+        CandidateSpec(
+            "ai_score_v2_moderate_10_16_score5",
+            "ai_scorecard_v2",
+            "v2_reclaim",
+            moderate_1h,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={**ai_score_common, "min_ai_score": 5, "min_hour_utc": 10, "max_hour_utc": 16},
+        ),
+        CandidateSpec(
+            "ai_score_v2_moderate_relstrength_score6",
+            "ai_scorecard_v2",
+            "v2_reclaim",
+            moderate_1h,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={**ai_score_common, "min_ai_score": 6, "min_relative_strength_percentile": 0.60},
+        ),
+        CandidateSpec(
+            "ai_score_v2_moderate_compression_score5",
+            "ai_scorecard_v2",
+            "v2_reclaim",
+            moderate_1h,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={
+                **ai_score_common,
+                "min_ai_score": 5,
+                "min_volume_percentile": 0.50,
+                "max_volume_percentile": 0.90,
+                "max_atr_expansion_multiple": 1.10,
+            },
+        ),
+        CandidateSpec(
+            "ai_score_v2_ablation_control_score7",
+            "ai_scorecard_v2_ablation",
+            "v2_reclaim",
+            base,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={**ai_score_common, "min_ai_score": 7},
+        ),
+        *[
+            CandidateSpec(
+                f"ai_score_v2_ablate_{component}",
+                "ai_scorecard_v2_ablation",
+                "v2_reclaim",
+                base,
+                exit_style="time_stop",
+                regime_filter="active_session",
+                use_correlation_filter=False,
+                params={**ai_score_common, "min_ai_score": 7, "ablate_ai_components": component},
+            )
+            for component in AI_SCORECARD_V2_ABLATION_COMPONENTS
+        ],
+        CandidateSpec(
+            "risk_off_london_relief_base",
+            "risk_off_london_relief",
+            "risk_off_london_relief",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="london_or_overlap",
+            use_correlation_filter=False,
+            params={**risk_off_relief_common},
+        ),
+        CandidateSpec(
+            "risk_off_london_relief_relstrong",
+            "risk_off_london_relief",
+            "risk_off_london_relief",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="london_or_overlap",
+            use_correlation_filter=False,
+            params={**risk_off_relief_common, "min_relative_strength_percentile": 0.65},
+        ),
+        CandidateSpec(
+            "risk_off_london_relief_taker",
+            "risk_off_london_relief",
+            "risk_off_london_relief",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="london_or_overlap",
+            use_correlation_filter=False,
+            params={**risk_off_relief_common, "min_taker_buy_sell_ratio": 1.10},
+        ),
+        CandidateSpec(
+            "risk_off_london_relief_oi_cooling",
+            "risk_off_london_relief",
+            "risk_off_london_relief",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="london_or_overlap",
+            use_correlation_filter=False,
+            params={**risk_off_relief_common, "max_metrics_oi_24h_change_pct": 0.0},
+        ),
+        CandidateSpec(
+            "risk_off_london_relief_strict_btc",
+            "risk_off_london_relief",
+            "risk_off_london_relief",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="london_or_overlap",
+            use_correlation_filter=False,
+            params={**risk_off_relief_common, "max_btc_return_pct": -3.0, "min_relative_strength_percentile": 0.60},
+        ),
+        CandidateSpec(
+            "risk_off_london_relief_fast",
+            "risk_off_london_relief",
+            "risk_off_london_relief",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="london_or_overlap",
+            use_correlation_filter=False,
+            params={**risk_off_relief_common, "max_bars": 4, "target_multiple": 1.0, "stop_atr_mult": 0.35},
+        ),
+        CandidateSpec(
             "crash_rebound_active",
             "absurd_candle",
             "crash_rebound",
@@ -2122,6 +2469,8 @@ def candidate_needs_funding(candidate: CandidateSpec) -> bool:
         "max_abs_funding_bps",
         "max_funding_age_hours",
         "require_funding_data",
+        "min_ai_score",
+        "use_ai_scorecard",
     }
     return any(key in candidate.params for key in funding_keys)
 
@@ -2141,6 +2490,8 @@ def candidate_needs_metrics(candidate: CandidateSpec) -> bool:
         "metrics_oi_change_lookback_hours",
         "max_metrics_age_minutes",
         "require_metrics_data",
+        "min_ai_score",
+        "use_ai_scorecard",
     }
     return any(key in candidate.params for key in metric_keys)
 
@@ -2523,6 +2874,45 @@ def evaluate_crash_rebound(
     return build_direct_long_risk_plan(current_price, stop_loss, fee_bps, candidate.config)
 
 
+def evaluate_risk_off_london_relief(
+    candidate: CandidateSpec,
+    current_price: float,
+    setup_slice: list[study.Candle],
+    trigger_slice: list[study.Candle],
+    fee_bps: float,
+) -> study.RiskPlan | None:
+    if len(trigger_slice) < 120 or len(setup_slice) < 20:
+        return None
+    atr_15m = study.calculate_atr(trigger_slice, 14)
+    if atr_15m is None or atr_15m <= 0.0:
+        return None
+    last = trigger_slice[-1]
+    prior_window = trigger_slice[-int(candidate.params.get("flush_lookback_bars", 12)) - 1 : -1]
+    if len(prior_window) < 4:
+        return None
+    prior_low = min(candle.low for candle in prior_window)
+    prior_high = max(candle.high for candle in prior_window)
+    candle_range = max(last.high - last.low, 1e-9)
+    close_location = (last.close - last.low) / candle_range
+    flush_atr = (prior_high - min(last.low, prior_low)) / atr_15m
+    min_flush_atr = float(candidate.params.get("min_flush_atr", 1.35))
+    min_close_location = float(candidate.params.get("min_close_location", 0.60))
+    if flush_atr < min_flush_atr:
+        return None
+    if last.low > prior_low:
+        return None
+    if close_location < min_close_location:
+        return None
+    if candidate.params.get("require_green_close") and last.close <= last.open:
+        return None
+    reclaim_buffer = atr_15m * float(candidate.params.get("reclaim_buffer_atr", 0.20))
+    if last.close < prior_low + reclaim_buffer:
+        return None
+    stop_atr_mult = float(candidate.params.get("stop_atr_mult", 0.45))
+    stop_loss = min(last.low, prior_low) - atr_15m * stop_atr_mult
+    return build_direct_long_risk_plan(current_price, stop_loss, fee_bps, candidate.config)
+
+
 def evaluate_exhaustion_short(
     candidate: CandidateSpec,
     current_price: float,
@@ -2731,6 +3121,349 @@ def estimated_round_trip_fee_r(risk_plan: study.RiskPlan, fee_bps: float) -> flo
     return (entry_fee + estimated_exit_fee) / risk_plan.risk_amount
 
 
+def latest_funding_bps(
+    funding_rows: list[derivatives_data.FundingRate] | None,
+    signal_close_time: int,
+    max_age_hours: float | None,
+) -> float | None:
+    if not funding_rows:
+        return None
+    times = row_times(funding_rows, "funding_time")
+    index = bisect.bisect_right(times, signal_close_time) - 1
+    if index < 0:
+        return None
+    funding = funding_rows[index]
+    if max_age_hours is not None:
+        age_hours = (signal_close_time - funding.funding_time) / (60 * 60 * 1000)
+        if age_hours < 0.0 or age_hours > max_age_hours:
+            return None
+    return funding.funding_rate * 10_000.0
+
+
+def latest_metric(
+    metric_rows: list[derivatives_data.FuturesMetric] | None,
+    signal_close_time: int,
+    max_age_minutes: float | None,
+) -> derivatives_data.FuturesMetric | None:
+    if not metric_rows:
+        return None
+    times = row_times(metric_rows, "timestamp")
+    index = bisect.bisect_right(times, signal_close_time) - 1
+    if index < 0:
+        return None
+    metric = metric_rows[index]
+    if max_age_minutes is not None:
+        age_minutes = (signal_close_time - metric.timestamp) / (60 * 1000)
+        if age_minutes < 0.0 or age_minutes > max_age_minutes:
+            return None
+    return metric
+
+
+def metric_oi_change_pct(
+    metric_rows: list[derivatives_data.FuturesMetric] | None,
+    signal_close_time: int,
+    lookback_hours: float = 24.0,
+    max_age_minutes: float | None = None,
+) -> float | None:
+    metric = latest_metric(metric_rows, signal_close_time, max_age_minutes)
+    if metric is None or not metric_rows:
+        return None
+    times = row_times(metric_rows, "timestamp")
+    previous_time = signal_close_time - int(lookback_hours * 60 * 60 * 1000)
+    previous_index = bisect.bisect_right(times, previous_time) - 1
+    if previous_index < 0:
+        return None
+    previous_metric = metric_rows[previous_index]
+    return derivatives_data.pct_change(previous_metric.sum_open_interest_value, metric.sum_open_interest_value)
+
+
+def ai_scorecard_v2(
+    candidate: CandidateSpec,
+    symbol: str,
+    signal_close_time: int,
+    trigger_slice: list[study.Candle],
+    btc_trend_slice: list[study.Candle],
+    risk_plan: study.RiskPlan,
+    fee_bps: float,
+    funding_rows: list[derivatives_data.FundingRate] | None,
+    metric_rows: list[derivatives_data.FuturesMetric] | None,
+    market_data: dict[str, MarketData] | None,
+) -> tuple[int, dict[str, Any]]:
+    score = 0
+    components: dict[str, Any] = {}
+    disabled_components = ai_scorecard_disabled_components(candidate)
+    if disabled_components:
+        components["ablated_ai_components"] = sorted(disabled_components)
+
+    session = session_bucket(signal_close_time)
+    session_points = {"london_ny_overlap": 2, "london": 1, "new_york": -2, "off_hours": -1}.get(session, 0)
+    score += ai_scorecard_component_points(
+        components,
+        disabled_components,
+        "session",
+        "session_points",
+        session_points,
+    )
+    components["session"] = session
+
+    fee_drag = estimated_round_trip_fee_r(risk_plan, fee_bps)
+    if fee_drag <= 0.35:
+        fee_points = 1
+    elif fee_drag > 0.45:
+        fee_points = -2
+    else:
+        fee_points = 0
+    score += ai_scorecard_component_points(components, disabled_components, "fee", "fee_points", fee_points)
+    components["fee_drag_r"] = rounded(fee_drag)
+
+    volume_rank = volume_percentile_rank(trigger_slice)
+    if volume_rank is None:
+        volume_points = 0
+    elif 0.50 <= volume_rank <= 0.90:
+        volume_points = 1
+    elif volume_rank >= 0.90 or volume_rank < 0.20:
+        volume_points = -1
+    else:
+        volume_points = 0
+    score += ai_scorecard_component_points(
+        components,
+        disabled_components,
+        "volume",
+        "volume_points",
+        volume_points,
+    )
+    components["volume_percentile_96"] = rounded(volume_rank)
+
+    atr_multiple = atr_expansion_multiple(trigger_slice)
+    if atr_multiple is None:
+        atr_points = 0
+    elif atr_multiple <= 1.10:
+        atr_points = 1
+    elif atr_multiple >= 1.50:
+        atr_points = -1
+    else:
+        atr_points = 0
+    score += ai_scorecard_component_points(components, disabled_components, "atr", "atr_points", atr_points)
+    components["atr_expansion_30_vs_90"] = rounded(atr_multiple)
+
+    btc_24h = btc_return_pct(btc_trend_slice, 24.0)
+    if btc_24h is None:
+        btc_points = 0
+    elif -5.0 <= btc_24h <= 5.0:
+        btc_points = 1
+    elif btc_24h < -10.0:
+        btc_points = -2
+    elif btc_24h > 10.0:
+        btc_points = -1
+    else:
+        btc_points = 0
+    score += ai_scorecard_component_points(components, disabled_components, "btc", "btc_points", btc_points)
+    components["btc_return_24h_pct"] = rounded(btc_24h)
+
+    if market_data is not None:
+        rs_24h = relative_strength_percentile(symbol, market_data, signal_close_time, 24.0)
+        basket_share = basket_positive_share_pct(market_data, signal_close_time, 24.0)
+    else:
+        rs_24h = None
+        basket_share = None
+    if rs_24h is None:
+        relative_points = 0
+    elif rs_24h >= 0.60:
+        relative_points = 2
+    elif rs_24h <= 0.30:
+        relative_points = -2
+    else:
+        relative_points = 0
+    score += ai_scorecard_component_points(
+        components,
+        disabled_components,
+        "relative_strength",
+        "relative_strength_points",
+        relative_points,
+    )
+    components["relative_strength_percentile_24h"] = rounded(rs_24h)
+
+    if basket_share is None:
+        breadth_points = 0
+    elif basket_share < 25.0:
+        breadth_points = -1
+    elif basket_share > 70.0:
+        breadth_points = 1
+    else:
+        breadth_points = 0
+    score += ai_scorecard_component_points(
+        components,
+        disabled_components,
+        "breadth",
+        "breadth_points",
+        breadth_points,
+    )
+    components["basket_positive_share_24h_pct"] = rounded(basket_share)
+
+    funding_bps = latest_funding_bps(
+        funding_rows,
+        signal_close_time,
+        float(candidate.params["max_funding_age_hours"]) if "max_funding_age_hours" in candidate.params else None,
+    )
+    if funding_bps is None:
+        funding_points = -2 if candidate.params.get("require_funding_data") else 0
+    elif funding_bps >= -1.0:
+        funding_points = 2
+    elif funding_bps >= -2.0:
+        funding_points = 1
+    elif funding_bps < -5.0:
+        funding_points = -3
+    else:
+        funding_points = -2
+    score += ai_scorecard_component_points(
+        components,
+        disabled_components,
+        "funding",
+        "funding_points",
+        funding_points,
+    )
+    components["funding_rate_bps"] = rounded(funding_bps)
+
+    max_metrics_age = (
+        float(candidate.params["max_metrics_age_minutes"]) if "max_metrics_age_minutes" in candidate.params else None
+    )
+    metric = latest_metric(metric_rows, signal_close_time, max_metrics_age)
+    if metric is None:
+        metric_missing_points = -2 if candidate.params.get("require_metrics_data") else 0
+        score += ai_scorecard_component_points(
+            components,
+            disabled_components,
+            "metrics_missing",
+            "metrics_missing_points",
+            metric_missing_points,
+        )
+    else:
+        taker = metric.sum_taker_long_short_vol_ratio
+        if taker >= 1.25:
+            taker_points = 2
+        elif taker < 1.0:
+            taker_points = -1
+        else:
+            taker_points = 0
+        score += ai_scorecard_component_points(
+            components,
+            disabled_components,
+            "taker",
+            "taker_points",
+            taker_points,
+        )
+        components["taker_buy_sell_ratio"] = rounded(taker)
+
+        oi_change = metric_oi_change_pct(metric_rows, signal_close_time, 24.0, max_metrics_age)
+        if oi_change is None:
+            oi_points = 0
+        elif -10.0 <= oi_change <= 0.0:
+            oi_points = 1
+        elif oi_change > 2.0 or oi_change < -15.0:
+            oi_points = -1
+        else:
+            oi_points = 0
+        score += ai_scorecard_component_points(components, disabled_components, "oi", "oi_points", oi_points)
+        components["metrics_open_interest_24h_change_pct"] = rounded(oi_change)
+
+        global_ratio = metric.count_long_short_ratio
+        if global_ratio <= 1.20:
+            global_points = 2
+        elif global_ratio >= 2.00:
+            global_points = -2
+        else:
+            global_points = 0
+        score += ai_scorecard_component_points(
+            components,
+            disabled_components,
+            "global_bias",
+            "global_bias_points",
+            global_points,
+        )
+        components["global_account_long_short_ratio"] = rounded(global_ratio)
+
+        top_position = metric.sum_toptrader_long_short_ratio
+        if top_position <= 1.40:
+            top_position_points = 1
+        elif top_position >= 2.00:
+            top_position_points = -1
+        else:
+            top_position_points = 0
+        score += ai_scorecard_component_points(
+            components,
+            disabled_components,
+            "top_position",
+            "top_position_points",
+            top_position_points,
+        )
+        components["top_trader_position_long_short_ratio"] = rounded(top_position)
+
+    components["ai_score_v2"] = score
+    return score, components
+
+
+def market_feature_diagnostics(
+    candidate: CandidateSpec,
+    symbol: str,
+    signal_close_time: int,
+    trigger_slice: list[study.Candle],
+    btc_trend_slice: list[study.Candle],
+    risk_plan: study.RiskPlan,
+    fee_bps: float,
+    funding_rows: list[derivatives_data.FundingRate] | None,
+    metric_rows: list[derivatives_data.FuturesMetric] | None,
+    market_data: dict[str, MarketData] | None,
+) -> dict[str, Any]:
+    diagnostics: dict[str, Any] = {
+        "fee_drag_r": rounded(estimated_round_trip_fee_r(risk_plan, fee_bps)),
+        "stop_pct": rounded(risk_plan.risk_per_unit / risk_plan.entry * 100.0),
+        "volume_percentile_96": rounded(volume_percentile_rank(trigger_slice)),
+        "atr_expansion_30_vs_90": rounded(atr_expansion_multiple(trigger_slice)),
+        "btc_return_24h_pct": rounded(btc_return_pct(btc_trend_slice, 24.0)),
+    }
+    if market_data is not None:
+        diagnostics["basket_positive_share_24h_pct"] = rounded(
+            basket_positive_share_pct(market_data, signal_close_time, 24.0)
+        )
+        diagnostics["relative_strength_percentile_24h"] = rounded(
+            relative_strength_percentile(symbol, market_data, signal_close_time, 24.0)
+        )
+    funding_bps = latest_funding_bps(
+        funding_rows,
+        signal_close_time,
+        float(candidate.params["max_funding_age_hours"]) if "max_funding_age_hours" in candidate.params else None,
+    )
+    diagnostics["funding_rate_bps"] = rounded(funding_bps)
+    max_metrics_age = (
+        float(candidate.params["max_metrics_age_minutes"]) if "max_metrics_age_minutes" in candidate.params else None
+    )
+    metric = latest_metric(metric_rows, signal_close_time, max_metrics_age)
+    if metric is not None:
+        diagnostics["taker_buy_sell_ratio"] = rounded(metric.sum_taker_long_short_vol_ratio)
+        diagnostics["global_account_long_short_ratio"] = rounded(metric.count_long_short_ratio)
+        diagnostics["top_trader_account_long_short_ratio"] = rounded(metric.count_toptrader_long_short_ratio)
+        diagnostics["top_trader_position_long_short_ratio"] = rounded(metric.sum_toptrader_long_short_ratio)
+        diagnostics["metrics_open_interest_24h_change_pct"] = rounded(
+            metric_oi_change_pct(metric_rows, signal_close_time, 24.0, max_metrics_age)
+        )
+    if candidate.params.get("use_ai_scorecard"):
+        score, components = ai_scorecard_v2(
+            candidate,
+            symbol,
+            signal_close_time,
+            trigger_slice,
+            btc_trend_slice,
+            risk_plan,
+            fee_bps,
+            funding_rows,
+            metric_rows,
+            market_data,
+        )
+        diagnostics["ai_score_v2"] = score
+        diagnostics["ai_score_components"] = components
+    return diagnostics
+
+
 def passes_post_signal_filters(
     candidate: CandidateSpec,
     symbol: str,
@@ -2741,6 +3474,7 @@ def passes_post_signal_filters(
     fee_bps: float,
     funding_rows: list[derivatives_data.FundingRate] | None = None,
     metric_rows: list[derivatives_data.FuturesMetric] | None = None,
+    market_data: dict[str, MarketData] | None = None,
 ) -> bool:
     if candidate.params.get("exclude_btc") and symbol == study.BTC_REFERENCE_SYMBOL:
         return False
@@ -2837,21 +3571,46 @@ def passes_post_signal_filters(
         if max_btc_return is not None and btc_return > float(max_btc_return):
             return False
 
+    min_relative_strength = candidate.params.get("min_relative_strength_percentile")
+    max_relative_strength = candidate.params.get("max_relative_strength_percentile")
+    if min_relative_strength is not None or max_relative_strength is not None:
+        if market_data is None:
+            return False
+        lookback_hours = float(candidate.params.get("relative_strength_lookback_hours", 24.0))
+        relative_strength = relative_strength_percentile(symbol, market_data, signal_close_time, lookback_hours)
+        if relative_strength is None:
+            return False
+        if min_relative_strength is not None and relative_strength < float(min_relative_strength):
+            return False
+        if max_relative_strength is not None and relative_strength > float(max_relative_strength):
+            return False
+
+    min_basket_positive_share = candidate.params.get("min_basket_positive_share_pct")
+    max_basket_positive_share = candidate.params.get("max_basket_positive_share_pct")
+    if min_basket_positive_share is not None or max_basket_positive_share is not None:
+        if market_data is None:
+            return False
+        lookback_hours = float(candidate.params.get("basket_breadth_lookback_hours", 24.0))
+        basket_share = basket_positive_share_pct(market_data, signal_close_time, lookback_hours)
+        if basket_share is None:
+            return False
+        if min_basket_positive_share is not None and basket_share < float(min_basket_positive_share):
+            return False
+        if max_basket_positive_share is not None and basket_share > float(max_basket_positive_share):
+            return False
+
     if candidate.params.get("require_overlap_session") and session_bucket(signal_close_time) != "london_ny_overlap":
         return False
 
     if candidate_needs_funding(candidate):
-        if not funding_rows:
-            return False
-        funding = derivatives_data.funding_at_or_before(funding_rows, signal_close_time)
-        if funding is None:
-            return False
         max_age_hours = candidate.params.get("max_funding_age_hours")
-        if max_age_hours is not None:
-            age_hours = (signal_close_time - funding.funding_time) / (60 * 60 * 1000)
-            if age_hours < 0.0 or age_hours > float(max_age_hours):
-                return False
-        funding_bps = funding.funding_rate * 10_000.0
+        funding_bps = latest_funding_bps(
+            funding_rows,
+            signal_close_time,
+            float(max_age_hours) if max_age_hours is not None else None,
+        )
+        if funding_bps is None:
+            return False
         min_funding_bps = candidate.params.get("min_funding_bps")
         if min_funding_bps is not None and funding_bps < float(min_funding_bps):
             return False
@@ -2863,16 +3622,14 @@ def passes_post_signal_filters(
             return False
 
     if candidate_needs_metrics(candidate):
-        if not metric_rows:
-            return False
-        metric = derivatives_data.metric_at_or_before(metric_rows, signal_close_time)
+        max_age_minutes = candidate.params.get("max_metrics_age_minutes")
+        metric = latest_metric(
+            metric_rows,
+            signal_close_time,
+            float(max_age_minutes) if max_age_minutes is not None else None,
+        )
         if metric is None:
             return False
-        max_age_minutes = candidate.params.get("max_metrics_age_minutes")
-        if max_age_minutes is not None:
-            age_minutes = (signal_close_time - metric.timestamp) / (60 * 1000)
-            if age_minutes < 0.0 or age_minutes > float(max_age_minutes):
-                return False
 
         min_taker = candidate.params.get("min_taker_buy_sell_ratio")
         if min_taker is not None and metric.sum_taker_long_short_vol_ratio < float(min_taker):
@@ -2885,15 +3642,11 @@ def passes_post_signal_filters(
         max_oi_change = candidate.params.get("max_metrics_oi_24h_change_pct")
         if min_oi_change is not None or max_oi_change is not None:
             lookback_hours = float(candidate.params.get("metrics_oi_change_lookback_hours", 24.0))
-            previous_metric = derivatives_data.metric_at_or_before(
+            oi_change = metric_oi_change_pct(
                 metric_rows,
-                signal_close_time - int(lookback_hours * 60 * 60 * 1000),
-            )
-            if previous_metric is None:
-                return False
-            oi_change = derivatives_data.pct_change(
-                previous_metric.sum_open_interest_value,
-                metric.sum_open_interest_value,
+                signal_close_time,
+                lookback_hours,
+                float(max_age_minutes) if max_age_minutes is not None else None,
             )
             if oi_change is None:
                 return False
@@ -2921,6 +3674,23 @@ def passes_post_signal_filters(
             return False
         max_top_position = candidate.params.get("max_top_trader_position_long_short_ratio")
         if max_top_position is not None and metric.sum_toptrader_long_short_ratio > float(max_top_position):
+            return False
+
+    min_ai_score = candidate.params.get("min_ai_score")
+    if min_ai_score is not None:
+        score, _ = ai_scorecard_v2(
+            candidate,
+            symbol,
+            signal_close_time,
+            trigger_slice,
+            btc_trend_slice,
+            risk_plan,
+            fee_bps,
+            funding_rows,
+            metric_rows,
+            market_data,
+        )
+        if score < int(min_ai_score):
             return False
 
     return True
@@ -2975,6 +3745,8 @@ def evaluate_candidate_signal(
         )
     if candidate.signal_kind == "crash_rebound":
         return evaluate_crash_rebound(candidate, current_price, setup_slice, trigger_slice, fee_bps)
+    if candidate.signal_kind == "risk_off_london_relief":
+        return evaluate_risk_off_london_relief(candidate, current_price, setup_slice, trigger_slice, fee_bps)
     if candidate.signal_kind == "exhaustion_short":
         return evaluate_exhaustion_short(candidate, current_price, setup_slice, trigger_slice, fee_bps)
     if candidate.signal_kind == "breakout_pullback":
@@ -3219,7 +3991,7 @@ def simulate_candidate_trade(
             risk_plan,
             future_candles,
             fee_bps,
-            target_multiple=1.5,
+            target_multiple=float(candidate.params.get("target_multiple", 1.5)),
             max_bars=int(candidate.params.get("max_bars", 16)),
         )
     if candidate.exit_style == "short_time_stop":
@@ -3313,6 +4085,7 @@ def collect_candidate_trades(
             fee_bps,
             data.funding,
             data.metrics,
+            market_data,
         ):
             index += 1
             continue
@@ -3341,6 +4114,18 @@ def collect_candidate_trades(
                 bars_held=trade.bars_held,
                 fees_paid=trade.fees_paid,
                 session_bucket=session_bucket(trade.opened_at),
+                diagnostics=market_feature_diagnostics(
+                    candidate,
+                    symbol,
+                    signal_close_time,
+                    trigger_slice,
+                    btc_trend_slice,
+                    risk_plan,
+                    fee_bps,
+                    data.funding,
+                    data.metrics,
+                    market_data,
+                ),
             )
         )
         if candidate.config.serial_mode:

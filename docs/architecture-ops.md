@@ -36,15 +36,29 @@ Vrne:
 - candle podatke
 - paper snapshot racuna, pozicij, orderjev in trade loga
 - `signal_assistant` za izbrani simbol
-    - `4h` trend bias
-  - `v2_reclaim_strategy` state machine: `WAIT -> STALK -> SETUP -> READY`
+  - active paper strategy: `ai_score_v2_base_score7`
+  - `4h` trend bias
+  - base reclaim state machine: `WAIT -> STALK -> SETUP -> READY`
   - `STALK`: zaprt `1h` close je znotraj `0.5 ATR` od supporta, vendar se ni reclaim-a
   - `SETUP`: zaprt `1h` close reclaim-a support
   - `READY`: po `1h` reclaim-u se zapre se veljaven `15m` momentum trigger
   - `session` gate (`07:00-22:00 UTC`)
-  - `correlation` gate proti `BTCUSDT`
+  - `ai_score_v2` gate (`score >= 7`) z fee drag, volume, ATR expansion, BTC return, basket breadth, relative strength, funding, OI, taker pressure, global bias, and top-trader position checks
+  - `correlation` proti `BTCUSDT` je runtime diagnostika, ni promoted-entry gate
   - `news blackout` gate prek javnih `BEA`, `Fed`, `SEC` in `CoinDesk` virov
-  - predlagan risk plan za paper long setup
+  - predlagan risk plan za rocni paper long setup; auto-paper uporablja isti gate, ce je izrecno vklopljen
+
+Auto-paper worker:
+
+- vklopi ga `AUTO_PAPER_TRADING=true`
+- preverja promoted watchlist na `AUTO_PAPER_INTERVAL_SECONDS`
+- uporablja isti `ai_score_v2_base_score7` gate kot `SignalAssistant`
+- odda samo lokalni paper market buy v SQLite ledger, brez exchange API-ja
+- ima en globalni auto slot (`AUTO_PAPER_MAX_OPEN_SLOTS=1`)
+- ne ponovi istega `strategy + symbol + signal_close_time` signala zaradi `auto_paper_decisions` idempotency tabele
+- dnevni cap: `AUTO_PAPER_MAX_DAILY_ENTRIES`
+- kill switch: blokira nove auto entryje, ko dnevni realized PnL pade pod `AUTO_PAPER_MAX_DAILY_LOSS_PERCENT`
+- izhodi so se vedno lokalni price-triggerji na attached stop-loss / take-profit
 
 ### `GET /api/replay`
 

@@ -4433,3 +4433,137 @@
 - Top gate failure counts: `net_avg_r<0.1=8, profit_factor<1.25=8, holdout_net_total_r<=0=8, holdout_net_avg_r<0.05=8, folds_positive<4=8`
 - Promoted strategies: `none`
 
+
+### Research campaign 2026-04-27T20:18:59Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\smoke_ai_scorecard_v2.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT`
+- Candidates tested: `6`
+- Universe filter: `profile=strict`, `min_quote_volume=5000000.0`
+- Top candidate: `ai_score_v2_base_score7`
+- Top OOS: `trades=0`, `net_total_r=0`, `net_avg_r=0.0`, `pf=0.0`
+- Top gate status: `fail`
+- Top gate failures: `not_full_12000_candle_walk_forward, executed_trades<80, net_avg_r<0.1, profit_factor<1.25, holdout_net_total_r<=0, holdout_net_avg_r<0.05, folds_positive<4`
+- Top gate failure counts: `not_full_12000_candle_walk_forward=6, executed_trades<80=6, net_avg_r<0.1=6, profit_factor<1.25=6, holdout_net_total_r<=0=6`
+- Promoted strategies: `none`
+
+
+### Research campaign 2026-04-27T20:19:19Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\smoke_risk_off_london_relief.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT`
+- Candidates tested: `6`
+- Universe filter: `profile=strict`, `min_quote_volume=5000000.0`
+- Top candidate: `risk_off_london_relief_base`
+- Top OOS: `trades=0`, `net_total_r=0`, `net_avg_r=0.0`, `pf=0.0`
+- Top gate status: `fail`
+- Top gate failures: `not_full_12000_candle_walk_forward, executed_trades<80, net_avg_r<0.1, profit_factor<1.25, holdout_net_total_r<=0, holdout_net_avg_r<0.05, folds_positive<4`
+- Top gate failure counts: `not_full_12000_candle_walk_forward=6, executed_trades<80=6, net_avg_r<0.1=6, profit_factor<1.25=6, holdout_net_total_r<=0=6`
+- Promoted strategies: `none`
+
+
+### Research campaign 2026-04-27T21:08:16Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\next_research_batch_universe12_20260427.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, BNBUSDT, ZECUSDT, TONUSDT, SUIUSDT, TRXUSDT, ADAUSDT, AAVEUSDT, LDOUSDT`
+- Candidates tested: `13`
+- Universe filter: `profile=strict`, `min_quote_volume=5000000.0`
+- Top candidate: `ai_score_v2_base_score7`
+- Top OOS: `trades=49`, `net_total_r=15.6721`, `net_avg_r=0.3198`, `pf=1.9884`
+- Top gate status: `fail`
+- Top gate failures: `executed_trades<80`
+- Top gate failure counts: `holdout_net_total_r<=0=10, holdout_net_avg_r<0.05=10, folds_positive<4=9, executed_trades<80=8, net_avg_r<0.1=8`
+- Promoted strategies: `none`
+
+
+### Research campaign 2026-04-27T22:31:05Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\ai_scorecard_v2_top2_universe30_20260427.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, BNBUSDT, ZECUSDT, TONUSDT, TRXUSDT, SUIUSDT, ADAUSDT, AAVEUSDT, LDOUSDT, AVAXUSDT, LINKUSDT, LTCUSDT, NEARUSDT, XLMUSDT, AXSUSDT, INJUSDT, UNIUSDT, HBARUSDT, APTUSDT, DASHUSDT, RAYUSDT, DOTUSDT, BCHUSDT, ALGOUSDT, RUNEUSDT, FILUSDT`
+- Candidates tested: `2`
+- Universe filter: `profile=strict`, `min_quote_volume=5000000.0`
+- Top candidate: `ai_score_v2_base_score7`
+- Top OOS: `trades=82`, `net_total_r=13.8474`, `net_avg_r=0.1689`, `pf=1.384`
+- Top gate status: `pass`
+- Top gate failures: `none`
+- Top gate failure counts: `net_avg_r<0.1=1, profit_factor<1.25=1, folds_positive<4=1`
+- Promoted strategies: `ai_score_v2_base_score7`
+
+### Paper approval 2026-04-28
+
+- Approved strategy: `ai_score_v2_base_score7`
+- Mode: `manual gated paper trading`
+- Runtime change: `SignalAssistant` now uses the approved scorecard as the active paper gate and can prefill paper orders only when all gates pass.
+- Execution boundary: no auto execution, no live funds, and no private exchange API usage.
+
+### Auto-paper approval 2026-04-28
+
+- Approved strategy: `ai_score_v2_base_score7`
+- Mode: `guarded automatic paper trading`
+- Runtime change: auto-paper worker can place local paper market buys when the approved gate passes.
+- Guardrails: one global auto slot, no BTC entries, no duplicate `strategy + symbol + signal_close_time`, max 3 auto entries per UTC day, 2% daily realized-loss kill switch, attached stop-loss / TP1, local SQLite ledger only.
+- Execution boundary: no live funds and no private exchange API usage.
+
+### Forward paper analytics 2026-04-28
+
+- Tool: `scripts/forward_paper_report.py`
+- Runtime change: auto-paper now records rejected technical-ready signals as `rejected` decisions and stores entry price, stop, TP, quantity, risk amount, and linked trade id for entered decisions.
+- Report command: `python scripts\forward_paper_report.py --markdown-out tmp\forward_paper_report_latest.md --json-out tmp\forward_paper_report_latest.json`
+- Current report state at implementation: no auto-paper decisions or trades logged yet because the market was still `WAIT`.
+
+### Runtime/harness parity 2026-04-28
+
+- Tool: `scripts/runtime_harness_parity.py`
+- Scope: compares live `SignalAssistant` technical stage, AI score, and risk-plan availability against independent Python evaluation of `ai_score_v2_base_score7`.
+- Initial check: `ETHUSDT,SOLUSDT` both passed parity with `technical_stage=wait`, `ai_score=0`, and no paper risk plan.
+- Caveat: runtime news blackout is a live-only gate, so risk-plan mismatches can be legitimate when news blocks an otherwise passing technical/score setup.
+
+
+### Research campaign 2026-04-28T09:19:52Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\ai_scorecard_v2_confirm_universe30_20260428.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, BNBUSDT, TONUSDT, ZECUSDT, TRXUSDT, SUIUSDT, ADAUSDT, AAVEUSDT, LINKUSDT, AXSUSDT, AVAXUSDT, LTCUSDT, APTUSDT, NEARUSDT, LDOUSDT, XLMUSDT, HBARUSDT, ARBUSDT, UNIUSDT, INJUSDT, DOTUSDT, BCHUSDT`
+- Candidates tested: `1`
+- Universe filter: `profile=strict`, `min_quote_volume=5000000.0`
+- Top candidate: `ai_score_v2_base_score7`
+- Top OOS: `trades=83`, `net_total_r=13.838`, `net_avg_r=0.1667`, `pf=1.3837`
+- Top gate status: `pass`
+- Top gate failures: `none`
+- Promoted strategies: `ai_score_v2_base_score7`
+
+
+### Research campaign 2026-04-28T11:26:53Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\smoke_ai_scorecard_v2_ablation.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT`
+- Candidates tested: `13`
+- Universe filter: `profile=strict`, `min_quote_volume=5000000.0`
+- Top candidate: `ai_score_v2_ablation_control_score7`
+- Top OOS: `trades=0`, `net_total_r=0`, `net_avg_r=0.0`, `pf=0.0`
+- Top gate status: `fail`
+- Top gate failures: `not_full_12000_candle_walk_forward, executed_trades<80, net_avg_r<0.1, profit_factor<1.25, holdout_net_total_r<=0, holdout_net_avg_r<0.05, folds_positive<4`
+- Top gate failure counts: `not_full_12000_candle_walk_forward=13, executed_trades<80=13, net_avg_r<0.1=13, profit_factor<1.25=13, holdout_net_total_r<=0=13`
+- Promoted strategies: `none`
+
+### Research handoff 2026-04-28
+
+- Status: `interrupted`
+- Scope: `ai_scorecard_v2_ablation_full_run`
+- Completed before interruption: ablation implementation, tests, docs, and smoke run.
+- Completed artifact: `tmp\research_runs\smoke_ai_scorecard_v2_ablation.json`
+- Missing artifact: `tmp\research_runs\ai_scorecard_v2_ablation_universe30_20260428.json`
+- Reason: the full 30-symbol ablation pass was force-stopped before completion.
+- Handoff file: `docs\research-handoff-2026-04-28.md`
+- Next command: `python scripts\research_harness.py --candidate-family ai_scorecard_v2_ablation --trigger-limit 12000 --universe-limit 30 --workers 4 --json-out tmp\research_runs\ai_scorecard_v2_ablation_universe30_20260428.json`

@@ -117,6 +117,28 @@ Coverage-first scan artifacts:
 
 Current interpretation after coverage scan: broad entries with good fold coverage are mostly negative. The only promising coverage branch is moderate `v2_reclaim` outside New York, but it remains too sparse and fold-unstable. Fold 2 is a high-volatility, broad-deleveraging regime; naive long entries lose, but naive short entries also lose after fees, stops, and whipsaw. The next search should focus on regime abstention and event-level prediction, not more hand-tightened long/short mirrors.
 
+## AI Scorecard Batch
+
+The next research batch added an explicit scorecard layer around existing entries rather than using AI as a standalone entry engine. The scorecard uses session, fee drag, volume percentile, ATR expansion, BTC 24h return, basket breadth, relative strength, funding, OI change, taker pressure, global account bias, and top-trader position bias.
+
+Artifacts:
+
+- `tmp/research_runs/smoke_ai_scorecard_v2.json`: tiny smoke window had no qualifying trades.
+- `tmp/research_runs/smoke_risk_off_london_relief.json`: tiny smoke window had no qualifying trades.
+- `tmp/research_runs/next_research_batch_universe12_20260427.json`: 13-candidate bounded pass. `ai_score_v2_base_score7` was strong but sparse: `trades=49`, `net_avg_r=0.3198`, `pf=1.9884`, failed only `executed_trades<80`. The risk-off London relief variants were negative and should not be broadened without redesign.
+- `tmp/research_runs/ai_scorecard_v2_top2_universe30_20260427.json`: focused full walk-forward on the two strongest scorecard variants over the strict 30-symbol universe. `ai_score_v2_base_score7` passed the harness promotion gates with `trades=82`, `net_total_r=13.8474`, `net_avg_r=0.1689`, `pf=1.384`, `max_drawdown_r=6.0054`, `holdout_net_total_r=8.3462`, `holdout_avg_r=0.2087`, and `4 of 5` positive folds.
+- `tmp/research_runs/ai_scorecard_v2_confirm_universe30_20260428.json`: focused confirmation run for only `ai_score_v2_base_score7`. It reproduced the pass with `trades=83`, `net_total_r=13.838`, `net_avg_r=0.1667`, `pf=1.3837`, `max_drawdown_r=6.0054`, `holdout_net_total_r=8.1486`, `holdout_avg_r=0.2037`, and `4 of 5` positive folds.
+
+Approval update: on April 28, 2026, the user approved `ai_score_v2_base_score7` for gated paper testing, then approved guarded automatic paper entries. The live `SignalAssistant` now treats it as the active paper strategy and can prefill manual paper orders only when the technical reclaim setup, active session, score >= 7, stop-distance, fee-drag, fresh Binance USD-M funding/positioning data, and news blackout gates pass. The auto-paper worker uses the same gate with one global open slot, daily caps, idempotency by `strategy + symbol + signal_close_time`, and local SQLite paper fills only. This is still paper-only and does not enable live funds.
+
+Next scorecard-ablation command:
+
+```powershell
+python scripts\research_harness.py --candidate-family ai_scorecard_v2_ablation --trigger-limit 12000 --universe-limit 30 --workers 4 --json-out tmp\research_runs\ai_scorecard_v2_ablation_latest.json
+```
+
+The `ai_scorecard_v2_ablation` family contains a score-7 control plus one-component-disabled variants for session, fee drag, volume, ATR expansion, BTC return, relative strength, basket breadth, funding, taker pressure, OI change, global bias, and top-trader position. It is intended to identify which scorecard components are carrying the edge while paper trading continues under the already-approved control.
+
 ## Predictive Meta-Model
 
 Use `scripts/predictive_meta_model.py` only as research diagnostics. It trains a small ridge-regression meta-model over entry-time features from `derivatives_metrics_profile_*.json` and reports blocked and chronological walk-forward filtering results:
