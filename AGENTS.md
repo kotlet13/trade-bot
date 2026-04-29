@@ -10,10 +10,10 @@ The project is not approved for live trading. Do not add live-funds execution or
 
 - Mode: approved gated paper testing plus ongoing research.
 - Live funds: disabled / out of scope.
-- Paper trading: enabled for `ai_score_v2_base_score7`; auto-paper can be enabled only for local paper ledger entries with the documented guardrails.
-- Latest completed focused full walk-forward run: `tmp/research_runs/ai_scorecard_v2_confirm_universe30_20260428.json`.
-- Latest focused full run result: `ai_score_v2_base_score7` confirmed its harness promotion-gate pass.
-- Runtime status: `ai_score_v2_base_score7` is wired into live `SignalAssistant` as the active gated paper strategy. Auto-paper uses one global slot, idempotency by `strategy + symbol + signal_close_time`, daily caps, and local SQLite paper fills only.
+- Paper trading: enabled for primary `ai_score_v2_base_score7` and secondary `ai_score_v2_ablate_oi`; auto-paper can be enabled only for local paper ledger entries with the documented guardrails.
+- Latest completed focused full walk-forward run: `tmp/research_runs/ai_scorecard_v2_ablate_oi_confirm_universe30_20260428.json`.
+- Latest focused full run result: `ai_score_v2_ablate_oi` confirmed its harness promotion-gate pass after the full ablation run.
+- Runtime status: `ai_score_v2_base_score7` and `ai_score_v2_ablate_oi` are wired into live `SignalAssistant` as gated paper strategies. Auto-paper uses one global slot, idempotency by `strategy + symbol + signal_close_time`, daily caps, and local SQLite paper fills only.
 - Previous best non-passing candidate: `v2_reclaim_overlap_only`, from `tmp/research_runs/research_run_20260426_150229.json`.
 - Bot service may be running on `http://localhost:8081`; verify with `/health`.
 
@@ -21,7 +21,7 @@ The project is not approved for live trading. Do not add live-funds execution or
 
 - Do not force trades.
 - Do not paper trade unless a candidate passes promotion gates and is explicitly approved.
-- Do not change the active `SignalAssistant` strategy only because a candidate looks interesting in a small run.
+- Do not add or change a `SignalAssistant` paper strategy only because a candidate looks interesting in a small run.
 - Do not commit runtime state, caches, compiled artifacts, or local databases.
 - Preserve user changes. Never revert unrelated dirty worktree changes without explicit request.
 
@@ -127,8 +127,8 @@ The pushed private repo was created from a clean export, not the old local git h
 
 Next research step:
 
-- Keep paper-testing `ai_score_v2_base_score7` in manual gated mode and journal every accepted/rejected signal.
+- Keep paper-testing `ai_score_v2_base_score7` and `ai_score_v2_ablate_oi` in guarded mode and journal every accepted/rejected signal.
 - Add forward-paper diagnostics comparing runtime scorecard decisions against the harness assumptions.
-- Run the `ai_scorecard_v2_ablation` family to measure which `ai_score_v2_base_score7` score components carry the edge.
+- Run parity for both runtime strategies and monitor whether the OI-ablation secondary bot improves forward paper quality.
 - Broaden event-level predictive modeling only as research diagnostics; do not promote a model unless it passes the normal gates.
 - Continue bounded candidate batches around derivatives data freshness, slippage/fill realism, session sensitivity, and scorecard ablations.

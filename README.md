@@ -35,7 +35,7 @@ Container ima nastavljen `restart: unless-stopped`, zato se po ponovnem zagonu D
 - candle chart na intervalih `1m`, `5m`, `15m`, `1h`, `4h`
 - signal assistant za izbran simbol:
     - `4h` trend filter
-    - active gated paper strategy: `ai_score_v2_base_score7`
+    - active gated paper strategies: primary `ai_score_v2_base_score7`, secondary `ai_score_v2_ablate_oi`
     - base reclaim state machine: `WAIT -> STALK -> SETUP -> READY`
     - `STALK`: cena je blizu `1h` supporta, vendar se ni zaprt reclaim
     - `SETUP`: zadnja zaprta `1h` svecka reclaim-a support
@@ -54,8 +54,10 @@ Container ima nastavljen `restart: unless-stopped`, zato se po ponovnem zagonu D
 - rocni `market` in `limit` paper orderji
 - stop-loss in take-profit na long paper entryjih
 - guarded auto-paper worker: ena globalna auto pozicija naenkrat, najvec 3 auto entryji na UTC dan, 2% dnevni realized-loss kill switch
+    - oba paper bota uporabljata isti lokalni SQLite paper executor in isti globalni slot
 - virtualni cash, pozicije, odprti orderji in PnL
 - trade log z notes in lokalno persistenco v SQLite
+- runtime telemetry archive v SQLite: recent tickerji, `1m/15m/1h/4h` svecke, USD-M funding, futures positioning metric rows, in `SignalAssistant` scorecard snapshots
 
 ## Kaj se ne dela se
 
@@ -74,7 +76,7 @@ Trenutni backend endpointi:
 
 - `GET /health`
 - `GET /api/dashboard`
-  - vrne tudi `signal_assistant` za izbrani simbol
+  - vrne tudi `signal_assistant` in `secondary_signal_assistants` za izbrani simbol
 - `GET /api/replay`
   - vrne zgodovinski replay signal assistant logike za izbrani simbol
 - `POST /api/paper/orders`
@@ -97,6 +99,11 @@ Okoljske spremenljivke:
 - `AUTO_PAPER_MAX_OPEN_SLOTS=1`
 - `AUTO_PAPER_MAX_DAILY_ENTRIES=3`
 - `AUTO_PAPER_MAX_DAILY_LOSS_PERCENT=2`
+- `RUNTIME_TELEMETRY_ENABLED=true`
+- `RUNTIME_TELEMETRY_INTERVAL_SECONDS=900`
+- `RUNTIME_TELEMETRY_CANDLE_LIMIT=240`
+- `RUNTIME_TELEMETRY_FUTURES_ENABLED=true`
+- `RUNTIME_TELEMETRY_SIGNAL_EVALUATIONS=true`
 
 Docker Compose mapira `8081:3000`, zato je aplikacija lokalno dosegljiva na `http://localhost:8081`.
 
@@ -110,6 +117,7 @@ Runtime/harness parity check:
 
 ```bash
 python scripts/runtime_harness_parity.py --symbols ETHUSDT,SOLUSDT --markdown-out tmp/runtime_harness_parity_latest.md --json-out tmp/runtime_harness_parity_latest.json
+python scripts/runtime_harness_parity.py --strategy ai_score_v2_ablate_oi --symbols ETHUSDT,SOLUSDT --markdown-out tmp/runtime_harness_parity_oi_latest.md --json-out tmp/runtime_harness_parity_oi_latest.json
 ```
 
 Scorecard ablation research:

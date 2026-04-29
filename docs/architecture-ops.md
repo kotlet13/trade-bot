@@ -19,6 +19,7 @@ Zagon poteka takole:
 4. frontend se servira iz `static/`
 5. UI ob osvezevanju klice backend, backend pa uporablja javne Binance endpointe za tickerje, cene in candles
 6. paper orderji in pozicije se obdelujejo lokalno v SQLite bazi
+7. runtime telemetry worker nizkofrekvencno arhivira javne market podatke za prihodnjo analizo
 
 ## Trenutni HTTP API
 
@@ -36,7 +37,8 @@ Vrne:
 - candle podatke
 - paper snapshot racuna, pozicij, orderjev in trade loga
 - `signal_assistant` za izbrani simbol
-  - active paper strategy: `ai_score_v2_base_score7`
+  - primary paper strategy: `ai_score_v2_base_score7`
+  - secondary paper strategy: `ai_score_v2_ablate_oi`
   - `4h` trend bias
   - base reclaim state machine: `WAIT -> STALK -> SETUP -> READY`
   - `STALK`: zaprt `1h` close je znotraj `0.5 ATR` od supporta, vendar se ni reclaim-a
@@ -44,6 +46,7 @@ Vrne:
   - `READY`: po `1h` reclaim-u se zapre se veljaven `15m` momentum trigger
   - `session` gate (`07:00-22:00 UTC`)
   - `ai_score_v2` gate (`score >= 7`) z fee drag, volume, ATR expansion, BTC return, basket breadth, relative strength, funding, OI, taker pressure, global bias, and top-trader position checks
+  - secondary bot uporablja enake gate-e, vendar ignorira OI-change score component, ker je `ai_score_v2_ablate_oi` potrdil promotion-gate pass
   - `correlation` proti `BTCUSDT` je runtime diagnostika, ni promoted-entry gate
   - `news blackout` gate prek javnih `BEA`, `Fed`, `SEC` in `CoinDesk` virov
   - predlagan risk plan za rocni paper long setup; auto-paper uporablja isti gate, ce je izrecno vklopljen
@@ -52,7 +55,7 @@ Auto-paper worker:
 
 - vklopi ga `AUTO_PAPER_TRADING=true`
 - preverja promoted watchlist na `AUTO_PAPER_INTERVAL_SECONDS`
-- uporablja isti `ai_score_v2_base_score7` gate kot `SignalAssistant`
+- uporablja `ai_score_v2_base_score7` in `ai_score_v2_ablate_oi` gate kot `SignalAssistant`
 - odda samo lokalni paper market buy v SQLite ledger, brez exchange API-ja
 - ima en globalni auto slot (`AUTO_PAPER_MAX_OPEN_SLOTS=1`)
 - ne ponovi istega `strategy + symbol + signal_close_time` signala zaradi `auto_paper_decisions` idempotency tabele
@@ -116,11 +119,20 @@ Trenutna persistenca je lokalna:
 - volume mapping v Dockerju: `./data:/data`
 - runtime nastavitev: `DATA_DIR=/data`
 
+Runtime telemetry archive je locen od paper ledgerja in ne oddaja orderjev. Privzeto je vklopljen z `RUNTIME_TELEMETRY_ENABLED=true` in na vsakih `900` sekund upserta:
+
+- `telemetry_market_tickers`: spot `24hr` snapshot za watchlist
+- `telemetry_candles`: recent `1m`, `15m`, `1h`, `4h` svecke, `RUNTIME_TELEMETRY_CANDLE_LIMIT` po requestu
+- `telemetry_funding_rates`: USD-M funding rows
+- `telemetry_futures_metric_rows`: USD-M 5m open interest, global account long/short, top-position long/short, taker long/short rows
+- `telemetry_signal_evaluations`: `SignalAssistant` snapshots, kadar jih runtime ze izracuna za dashboard ali auto-paper cycle
+
 Operativna posledica:
 
 - stanje aplikacije je vezano na lokalni disk masina/container para
 - backup in prenos stanja sta za zdaj rocna
 - ni multi-user concurrency modela
+- `tmp/research_cache` in `tmp/derivatives_cache` ostaneta raziskovalna cache-a; durable runtime archive je v `data/tradebot.db`
 
 ## Konfiguracija in deployment
 
@@ -133,6 +145,11 @@ Privzeta konfiguracija:
 - `STARTING_CASH=10000`
 - `PAPER_FEE_BPS=10`
 - `DEFAULT_INTERVAL=1m`
+- `RUNTIME_TELEMETRY_ENABLED=true`
+- `RUNTIME_TELEMETRY_INTERVAL_SECONDS=900`
+- `RUNTIME_TELEMETRY_CANDLE_LIMIT=240`
+- `RUNTIME_TELEMETRY_FUTURES_ENABLED=true`
+- `RUNTIME_TELEMETRY_SIGNAL_EVALUATIONS=true`
 
 Lokalni dostop:
 

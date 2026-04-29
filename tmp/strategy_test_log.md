@@ -4567,3 +4567,207 @@
 - Reason: the full 30-symbol ablation pass was force-stopped before completion.
 - Handoff file: `docs\research-handoff-2026-04-28.md`
 - Next command: `python scripts\research_harness.py --candidate-family ai_scorecard_v2_ablation --trigger-limit 12000 --universe-limit 30 --workers 4 --json-out tmp\research_runs\ai_scorecard_v2_ablation_universe30_20260428.json`
+
+### Research campaign 2026-04-28T15:25:25Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\ai_scorecard_v2_ablation_universe30_20260428.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, BNBUSDT, TONUSDT, ZECUSDT, TRXUSDT, SUIUSDT, ADAUSDT, AAVEUSDT, AVAXUSDT, LINKUSDT, AXSUSDT, LTCUSDT, APTUSDT, LDOUSDT, NEARUSDT, XLMUSDT, RAYUSDT, UNIUSDT, ARBUSDT, HBARUSDT, DOTUSDT`
+- Candidates tested: `13`
+- Universe filter: `profile=strict`, `min_quote_volume=5000000.0`
+- Top candidate: `ai_score_v2_ablate_oi`
+- Top OOS: `trades=86`, `net_total_r=17.739`, `net_avg_r=0.2063`, `pf=1.4703`
+- Top gate status: `pass`
+- Top gate failures: `none`
+- Top gate failure counts: `executed_trades<80=10, folds_positive<4=8, net_avg_r<0.1=1, profit_factor<1.25=1`
+- Promoted strategies: `ai_score_v2_ablate_oi`
+
+Interpretation:
+
+- The OI ablation was the only ablation variant to pass the full harness gates: `86` OOS trades, `17.739R` net, `0.2063R` average, `pf=1.4703`, `max_drawdown=6.0666R`, holdout `7.9801R`, holdout average `0.1773R`, `4/5` positive folds, symbol concentration `15.36%`, and single-trade concentration `2.64%`.
+- The control remained strong but failed the trade-count gate with `77` trades, so the OI component appears to be over-filtering or adding noise in this run.
+- This does not change the active runtime strategy. `ai_score_v2_base_score7` remains the only approved gated paper strategy unless `ai_score_v2_ablate_oi` is confirmed in a focused run and explicitly approved.
+
+
+### Research campaign 2026-04-28T15:46:09Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\ai_scorecard_v2_ablate_oi_confirm_universe30_20260428.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, BNBUSDT, TONUSDT, ZECUSDT, TRXUSDT, SUIUSDT, ADAUSDT, AAVEUSDT, AVAXUSDT, LINKUSDT, AXSUSDT, LTCUSDT, APTUSDT, LDOUSDT, NEARUSDT, XLMUSDT, RAYUSDT, UNIUSDT, ARBUSDT, HBARUSDT, DOTUSDT`
+- Candidates tested: `1`
+- Top candidate: `ai_score_v2_ablate_oi`
+- Top OOS: `trades=86`, `net_total_r=17.739`, `net_avg_r=0.2063`, `pf=1.4703`
+- Top gate status: `pass`
+- Top gate failures: `none`
+- Promoted strategies: `ai_score_v2_ablate_oi`
+
+Interpretation:
+
+- Focused confirmation reproduced the ablation pass exactly on the explicit 24-symbol universe: `86` OOS trades, `17.739R` net, `0.2063R` average, `pf=1.4703`, `max_drawdown=6.0666R`, holdout `7.9801R`, holdout average `0.1773R`, `4/5` positive folds, symbol concentration `15.36%`, and single-trade concentration `2.64%`.
+- `ai_score_v2_ablate_oi` is now a confirmed promotion-gate pass in the research harness. It should be added only as a paper-only secondary bot with the existing guardrails, not as live execution.
+
+### Secondary paper bot implementation 2026-04-28
+
+- Status: `implemented`
+- Strategy: `ai_score_v2_ablate_oi`
+- Scope: secondary guarded paper bot beside primary `ai_score_v2_base_score7`
+- Runtime behavior: evaluates both paper strategies from the same market/context snapshot; auto-paper still uses one shared global slot, daily caps, idempotency by `strategy_version + symbol + signal_close_time`, local SQLite fills, attached stop-loss / TP1, and no live exchange execution.
+- Difference from primary: secondary ignores the OI-change score component to match the confirmed harness candidate.
+- UI/API: dashboard now returns `secondary_signal_assistants` and displays the secondary paper bot state for the selected symbol.
+- Reporting: forward paper report now includes strategy counts and strategy versions for decisions/trades.
+- Parity: `scripts\runtime_harness_parity.py` accepts `--strategy ai_score_v2_ablate_oi`.
+
+### Predictive meta-model diagnostic 2026-04-29
+
+- Status: `done`
+- Scope: `event_dataset_latest_diagnostic`
+- Artifacts: `tmp\research_runs\event_dataset_latest.json`, `tmp\research_runs\predictive_meta_model_event_dataset_latest.json`
+- Dataset: `524` events, `87840` metric rows, `24` symbols, `3` source candidates
+- Baseline event surface: `trades=524`, `net_total_r=-0.7055`, `net_avg_r=-0.0013`, `pf=0.9972`, `max_drawdown=46.6536R`
+- Best blocked CV filter: `blocked_cv_keep_0.25` with `trades=136`, `net_total_r=10.6911`, `net_avg_r=0.0786`, `pf=1.1694`, `max_drawdown=14.0524R`
+- Strongest diagnostic rules:
+  - `rule_global_account_lte_1.20`: `trades=109`, `net_total_r=27.3078`, `net_avg_r=0.2505`, `pf=1.6025`, `max_drawdown=8.7569R`
+  - `rule_funding_not_panic_and_taker_buy`: `trades=242`, `net_total_r=47.4988`, `net_avg_r=0.1963`, `pf=1.4896`, `max_drawdown=14.4312R`
+  - `rule_taker_buy_sell_ge_1.25`: `trades=286`, `net_total_r=35.7041`, `net_avg_r=0.1248`, `pf=1.2983`, `max_drawdown=15.8406R`
+
+Interpretation:
+
+- The pooled event surface remains weak without filtering, so the model does not justify a runtime or paper-trading change.
+- The global-account rule is the most interesting diagnostic because it clears the aggregate avg-R, PF, trade-count, drawdown, symbol concentration, and single-trade concentration thresholds, but it is not a promotion-protocol run and has sparse/unstable chronological segments, including no segment-04 trades and a weak segment-12.
+- The funding-not-panic plus taker-buy rule has the strongest raw net, but drawdown remains above the promotion limit and late segments are unstable.
+- Next bounded research step: convert these diagnostics into a normal harness candidate family around global-account bias <= `1.20`, taker-buy pressure >= `1.25`, funding-not-panic, and combinations/session gates, then require the full promotion gates before any paper bot change.
+- Runtime status unchanged: `ai_score_v2_base_score7` remains primary and `ai_score_v2_ablate_oi` remains secondary, both paper-only.
+
+### Event rule filter family implementation 2026-04-29
+
+- Status: `running`
+- Scope: `event_rule_filters_harness_family`
+- Family: `event_rule_filters`
+- Candidate count: `14`
+- Source: predictive meta-model diagnostics from `tmp\research_runs\predictive_meta_model_event_dataset_latest.json`
+- Filters tested: global account long/short <= `1.20`, taker buy/sell >= `1.25`, funding >= `-0.9999 bps`, combinations, `10-16 UTC` dampeners, London/overlap dampener, and base/moderate/no-correlation v2 reclaim variants.
+- Runtime impact: none. This is harness-only research; active paper setup remains `ai_score_v2_base_score7` primary and `ai_score_v2_ablate_oi` secondary.
+- Validation so far: `python -m py_compile ...`, `python scripts\test_research_harness.py`, and smoke run `tmp\research_runs\smoke_event_rule_filters_all.json` passed.
+- Background command: `python scripts\research_harness.py --candidate-family event_rule_filters --trigger-limit 12000 --universe-limit 30 --workers 2 --json-out tmp\research_runs\event_rule_filters_universe30_20260429.json`
+- Background PID: `31856`
+- Logs: `tmp\research_runs\event_rule_filters_universe30_20260429.stdout.log`, `tmp\research_runs\event_rule_filters_universe30_20260429.stderr.log`
+- Heartbeat: `check-event-rule-filter-run`
+
+
+### Research campaign 2026-04-29T06:02:11Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\smoke_event_rule_filters.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT`
+- Candidates tested: `6`
+- Universe filter: `profile=strict`, `min_quote_volume=5000000.0`
+- Top candidate: `event_rule_v2_base_global_lte120`
+- Top OOS: `trades=0`, `net_total_r=0`, `net_avg_r=0.0`, `pf=0.0`
+- Top gate status: `fail`
+- Top gate failures: `not_full_12000_candle_walk_forward, executed_trades<80, net_avg_r<0.1, profit_factor<1.25, holdout_net_total_r<=0, holdout_net_avg_r<0.05, folds_positive<4`
+- Top gate failure counts: `not_full_12000_candle_walk_forward=6, executed_trades<80=6, net_avg_r<0.1=6, profit_factor<1.25=6, holdout_net_total_r<=0=6`
+- Promoted strategies: `none`
+
+
+### Research campaign 2026-04-29T06:02:34Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\smoke_event_rule_filters_all.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT`
+- Candidates tested: `14`
+- Universe filter: `profile=strict`, `min_quote_volume=5000000.0`
+- Top candidate: `event_rule_v2_base_global_lte120`
+- Top OOS: `trades=0`, `net_total_r=0`, `net_avg_r=0.0`, `pf=0.0`
+- Top gate status: `fail`
+- Top gate failures: `not_full_12000_candle_walk_forward, executed_trades<80, net_avg_r<0.1, profit_factor<1.25, holdout_net_total_r<=0, holdout_net_avg_r<0.05, folds_positive<4`
+- Top gate failure counts: `not_full_12000_candle_walk_forward=14, executed_trades<80=14, net_avg_r<0.1=14, profit_factor<1.25=14, holdout_net_total_r<=0=14`
+- Promoted strategies: `none`
+
+### Research campaign 2026-04-29T08:44:01Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\event_rule_filters_universe30_20260429.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT, TONUSDT, XRPUSDT, BNBUSDT, ZECUSDT, TRXUSDT, SUIUSDT, ADAUSDT, AAVEUSDT, AVAXUSDT, LTCUSDT, LINKUSDT, XLMUSDT, AXSUSDT, NEARUSDT, APTUSDT, UNIUSDT, ARBUSDT`
+- Candidates tested: `14`
+- Universe filter: `profile=strict`, `min_quote_volume=5000000.0`
+- Top candidate: `event_rule_v2_base_global_lte120`
+- Top OOS: `trades=31`, `net_total_r=15.4676`, `net_avg_r=0.499`, `pf=2.7134`
+- Top gate status: `fail`
+- Top gate failures: `executed_trades<80, folds_positive<4, symbol_concentration>0.4`
+- Top gate failure counts: `folds_positive<4=13, executed_trades<80=12, symbol_concentration>0.4=10, holdout_net_avg_r<0.05=4, holdout_net_total_r<=0=3`
+- Promoted strategies: `none`
+Interpretation:
+
+- No `event_rule_filters` candidate passed the promotion gates, so there is no paper-bot or runtime change.
+- The cleanest result was `event_rule_v2_base_global_lte120`: `31` OOS trades, `15.4676R` net, `0.499R` average, `pf=2.7134`, `max_drawdown=2.3784R`, and holdout `9.2679R`. It failed because it was too sparse, had only `3/5` positive folds, and symbol concentration was too high at `52.11%`.
+- `event_rule_v2_base_funding_taker` was the closest coverage candidate with `76` trades, `9.2051R` net, `0.1211R` average, `pf=1.3122`, `max_drawdown=4.0306R`, and `4/5` positive folds, but holdout was slightly negative (`-0.0948R`) and trade count was still below `80`.
+- `event_rule_v2_base_taker_ge125` reached `87` trades but failed quality gates (`0.0688R` average, `pf=1.1656`, holdout average `0.0447R`, and `3/5` positive folds).
+- The diagnostic filters improved trade quality but remain either too sparse/concentrated or too weak when broadened. Treat global-account bias <= `1.20` as a useful scorecard feature, not a standalone strategy promotion.
+
+### AI scorecard global sweep implementation 2026-04-29
+
+- Status: `running`
+- Scope: `ai_scorecard_v2_global_sweep`
+- Candidate count: `14`
+- Source: `event_rule_filters` showed global-account bias improves quality but is too sparse as a standalone rule.
+- Filters tested: score threshold `6`/`7`, global account long/short caps `1.20`, `1.35`, and `1.50`, OI ablation, and top-trader-position cap `1.60`.
+- Runtime impact: none. This is harness-only research; active paper setup remains `ai_score_v2_base_score7` primary and `ai_score_v2_ablate_oi` secondary.
+- Validation so far: `python -m py_compile ...`, `python scripts\test_research_harness.py`, and smoke run `tmp\research_runs\smoke_ai_scorecard_v2_global_sweep.json` passed.
+- Background command: `python scripts\research_harness.py --candidate-family ai_scorecard_v2_global_sweep --trigger-limit 12000 --universe-limit 30 --workers 2 --json-out tmp\research_runs\ai_scorecard_v2_global_sweep_universe30_20260429.json`
+- Background PID: `40976`
+- Logs: `tmp\research_runs\ai_scorecard_v2_global_sweep_universe30_20260429.stdout.log`, `tmp\research_runs\ai_scorecard_v2_global_sweep_universe30_20260429.stderr.log`
+- Heartbeat: `check-scorecard-global-sweep`
+
+### Runtime telemetry archive implementation 2026-04-29
+
+- Status: `implemented`
+- Scope: `runtime-data-infrastructure`
+- Runtime impact: analysis-only collection; no paper strategy change and no live exchange execution
+- SQLite tables added: `telemetry_market_tickers`, `telemetry_candles`, `telemetry_funding_rates`, `telemetry_futures_metric_rows`, `telemetry_signal_evaluations`
+- Default cadence: `RUNTIME_TELEMETRY_INTERVAL_SECONDS=900`
+- Default candle archive: `1m`, `15m`, `1h`, `4h` with `RUNTIME_TELEMETRY_CANDLE_LIMIT=240`
+- Signal archive: persists `SignalAssistant` snapshots from dashboard and auto-paper evaluations, including stage, technical stage, AI score, failed checks, checklist JSON, warnings, tags, and risk-plan fields when present
+- Purpose: preserve enough runtime market and scorecard context for future forward-analysis without relying only on disposable `tmp` research caches
+
+
+### Research campaign 2026-04-29T08:50:50Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\smoke_ai_scorecard_v2_global_sweep.json`
+- Universe: `BTCUSDT, ETHUSDT, TONUSDT`
+- Candidates tested: `14`
+- Universe filter: `profile=strict`, `min_quote_volume=5000000.0`
+- Top candidate: `ai_score_global_base_s6_g120`
+- Top OOS: `trades=0`, `net_total_r=0`, `net_avg_r=0.0`, `pf=0.0`
+- Top gate status: `fail`
+- Top gate failures: `not_full_12000_candle_walk_forward, executed_trades<80, net_avg_r<0.1, profit_factor<1.25, holdout_net_total_r<=0, holdout_net_avg_r<0.05, folds_positive<4`
+- Top gate failure counts: `not_full_12000_candle_walk_forward=14, executed_trades<80=14, net_avg_r<0.1=14, profit_factor<1.25=14, holdout_net_total_r<=0=14`
+- Promoted strategies: `none`
+
+### Research campaign 2026-04-29T10:17:30Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\ai_scorecard_v2_global_sweep_universe30_20260429.json`
+- Universe: `BTCUSDT, ETHUSDT, TONUSDT, SOLUSDT, XRPUSDT, BNBUSDT, ZECUSDT, TRXUSDT, ADAUSDT, AAVEUSDT, SUIUSDT, XLMUSDT, AVAXUSDT, APTUSDT, LTCUSDT, LINKUSDT, AXSUSDT, NEARUSDT, UNIUSDT`
+- Candidates tested: `14`
+- Universe filter: `profile=strict`, `min_quote_volume=5000000.0`
+- Top candidate: `ai_score_global_oi_s7_g150_toppos160`
+- Top OOS: `trades=26`, `net_total_r=20.1227`, `net_avg_r=0.7739`, `pf=6.5461`
+- Top gate status: `fail`
+- Top gate failures: `executed_trades<80, folds_positive<4`
+- Top gate failure counts: `executed_trades<80=14, folds_positive<4=14, symbol_concentration>0.4=5`
+- Promoted strategies: `none`
+
+Interpretation:
+
+- No `ai_scorecard_v2_global_sweep` candidate passed the promotion gates, so there is no paper-bot or runtime change.
+- The best candidate, `ai_score_global_oi_s7_g150_toppos160`, had excellent quality but only `26` OOS trades: `20.1227R` net, `0.7739R` average, `pf=6.5461`, `max_drawdown=1.3108R`, holdout `8.5304R`, and `3/5` positive folds.
+- The broader best score-6 branch, `ai_score_global_oi_s6_g150`, reached only `39` trades with `14.445R` net, `0.3704R` average, `pf=2.0779`, `max_drawdown=5.0478R`, holdout `7.5347R`, and `3/5` positive folds.
+- Global-account and top-position caps are useful quality filters, but in this sweep they removed too much coverage and left fold gaps. Treat them as research diagnostics, not a promotion candidate.

@@ -10,3 +10,5 @@ tmp/research_runs/
 tmp/pylibs/
 tmp/pdfs/
 tmp/strategy_study_*.json
+tmp/forward_paper_report_latest.*
+tmp/runtime_harness_parity*_latest.*

@@ -4,6 +4,7 @@ const appState = {
   watchlist: [],
   refreshTimer: null,
   signalAssistant: null,
+  secondarySignalAssistants: [],
   replayReport: null,
   replaySymbol: null,
   replayLoading: false,
@@ -20,6 +21,7 @@ const signalCards = document.querySelector("#signalCards");
 const signalChecklist = document.querySelector("#signalChecklist");
 const signalRiskPlan = document.querySelector("#signalRiskPlan");
 const signalWarnings = document.querySelector("#signalWarnings");
+const secondarySignals = document.querySelector("#secondarySignals");
 const prefillSignalTrade = document.querySelector("#prefillSignalTrade");
 const replayUpdatedAt = document.querySelector("#replayUpdatedAt");
 const replaySummary = document.querySelector("#replaySummary");
@@ -75,11 +77,13 @@ function renderDashboard(data) {
   appState.watchlist = data.watchlist;
   appState.symbol = data.selected_symbol;
   appState.signalAssistant = data.signal_assistant || null;
+  appState.secondarySignalAssistants = data.secondary_signal_assistants || [];
   syncTradeSymbolOptions(data.watchlist);
   renderSummary(data.paper);
   renderMarket(data.tickers);
   renderChart(data.candles, data.selected_symbol, data.interval);
   renderSignalAssistant(data.signal_assistant);
+  renderSecondarySignalAssistants(appState.secondarySignalAssistants);
   renderPositions(data.paper.positions);
   renderOrders(data.paper.open_orders);
   renderTrades(data.paper.trades);
@@ -264,6 +268,7 @@ function renderSignalAssistant(signal) {
     signalChecklist.innerHTML = "";
     signalRiskPlan.innerHTML = "";
     signalWarnings.innerHTML = "";
+    secondarySignals.innerHTML = "";
     prefillSignalTrade.disabled = true;
     return;
   }
@@ -364,6 +369,47 @@ function renderSignalAssistant(signal) {
     .join("");
 
   prefillSignalTrade.disabled = !signal.risk_plan;
+}
+
+function renderSecondarySignalAssistants(signals) {
+  if (!secondarySignals) {
+    return;
+  }
+  if (!signals.length) {
+    secondarySignals.innerHTML = "";
+    return;
+  }
+
+  secondarySignals.innerHTML = signals
+    .map((signal) => {
+      const topWarnings = (signal.warnings || []).slice(0, 2);
+      const riskPlan = signal.risk_plan
+        ? `Entry ${formatMoney(signal.risk_plan.entry)} | Stop ${formatMoney(signal.risk_plan.stop_loss)} | TP1 ${formatMoney(signal.risk_plan.take_profit_1)} | Qty ${formatQuantity(signal.risk_plan.suggested_quantity)}`
+        : "Brez aktivnega plana";
+      return `
+        <article class="secondary-bot">
+          <div class="secondary-bot-head">
+            <div>
+              <span class="signal-card-label">Secondary paper bot</span>
+              <strong>${escapeHtml(signal.strategy_version || "paper_strategy")}</strong>
+            </div>
+            <span class="signal-pill ${signal.risk_plan ? "is-positive" : ""}">${signal.risk_plan ? "Approved gate" : "Watch"}</span>
+          </div>
+          <p class="secondary-bot-summary">${escapeHtml(signal.summary || "")}</p>
+          <div class="secondary-bot-grid">
+            <span>Stage ${formatSignalStage(signal.stage)}</span>
+            <span>Score ${signal.ai_score ?? 0}</span>
+            <span>${escapeHtml(riskPlan)}</span>
+          </div>
+          ${
+            topWarnings.length
+              ? `<div class="secondary-bot-warnings">${topWarnings.map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</div>`
+              : ""
+          }
+        </article>
+      `;
+    })
+    .join("");
 }
 
 function renderPositions(positions) {

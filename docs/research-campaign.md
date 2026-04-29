@@ -139,6 +139,18 @@ python scripts\research_harness.py --candidate-family ai_scorecard_v2_ablation -
 
 The `ai_scorecard_v2_ablation` family contains a score-7 control plus one-component-disabled variants for session, fee drag, volume, ATR expansion, BTC return, relative strength, basket breadth, funding, taker pressure, OI change, global bias, and top-trader position. It is intended to identify which scorecard components are carrying the edge while paper trading continues under the already-approved control.
 
+A full scorecard ablation run completed in `tmp/research_runs/ai_scorecard_v2_ablation_universe30_20260428.json`. The only gate-passing ablation was `ai_score_v2_ablate_oi`: `86` OOS trades, `17.739R` net, `0.2063R` average, `pf=1.4703`, `max_drawdown=6.0666R`, holdout `7.9801R`, holdout average `0.1773R`, and `4/5` positive folds. The score-7 control remained strong but failed trade count with `77` trades, so the OI component is likely over-filtering or adding noise in this run. This is not a runtime promotion; keep `ai_score_v2_base_score7` active until `ai_score_v2_ablate_oi` is confirmed in a focused run and explicitly approved.
+
+Next focused confirmation command:
+
+```powershell
+python scripts\research_harness.py --candidate-name ai_score_v2_ablate_oi --trigger-limit 12000 --universe-limit 30 --workers 1 --json-out tmp\research_runs\ai_scorecard_v2_ablate_oi_confirm_universe30_20260428.json
+```
+
+Focused confirmation completed in `tmp/research_runs/ai_scorecard_v2_ablate_oi_confirm_universe30_20260428.json` and reproduced the pass exactly: `86` OOS trades, `17.739R` net, `0.2063R` average, `pf=1.4703`, `max_drawdown=6.0666R`, holdout `7.9801R`, holdout average `0.1773R`, `4/5` positive folds, symbol concentration `15.36%`, and single-trade concentration `2.64%`. Treat `ai_score_v2_ablate_oi` as a confirmed research promotion-gate pass, but do not replace the active runtime strategy without explicit user approval.
+
+Runtime update: `ai_score_v2_ablate_oi` is now wired as a secondary guarded paper bot. It shares the same local SQLite paper executor, one global slot, daily caps, loss kill switch, stop/TP attachment, news blackout, and public Binance data freshness requirements as the primary bot. It only differs by ignoring the OI-change score component. This remains paper-only.
+
 ## Predictive Meta-Model
 
 Use `scripts/predictive_meta_model.py` only as research diagnostics. It trains a small ridge-regression meta-model over entry-time features from `derivatives_metrics_profile_*.json` and reports blocked and chronological walk-forward filtering results:
@@ -157,3 +169,27 @@ python scripts/predictive_meta_model.py --profile tmp/research_runs/event_datase
 ```
 
 This dataset includes multiple setup variants across chronological segments and is for model research only, not promotion.
+
+Latest diagnostic: `tmp/research_runs/event_dataset_latest.json` and `tmp/research_runs/predictive_meta_model_event_dataset_latest.json` completed on April 29, 2026. The unfiltered event surface was flat/negative (`524` trades, `-0.7055R`, `pf=0.9972`, `max_drawdown=46.6536R`). The model filter improved but did not reach promotion-quality statistics (`blocked_cv_keep_0.25`: `136` trades, `10.6911R`, `0.0786R`, `pf=1.1694`, `max_drawdown=14.0524R`). Simple diagnostic rules were more promising: `rule_global_account_lte_1.20` produced `109` trades, `27.3078R`, `0.2505R`, `pf=1.6025`, and `max_drawdown=8.7569R`, while `rule_funding_not_panic_and_taker_buy` produced `242` trades, `47.4988R`, `0.1963R`, `pf=1.4896`, and `max_drawdown=14.4312R`. These are diagnostics only; the next step is to convert them into proper harness candidates and rerun the normal promotion gates before any runtime or paper-trading change.
+
+That conversion is implemented as the `event_rule_filters` harness family. It keeps the active paper setup unchanged and tests the diagnostic filters as normal strategy candidates: global-account bias <= `1.20`, taker-buy pressure >= `1.25`, funding-not-panic, their combinations, session dampeners, and the base/moderate/no-correlation v2 reclaim source variants surfaced by the event dataset.
+
+```powershell
+python scripts\research_harness.py --candidate-family event_rule_filters --trigger-limit 12000 --universe-limit 30 --workers 2 --json-out tmp\research_runs\event_rule_filters_universe30_latest.json
+```
+
+Full result: `tmp/research_runs/event_rule_filters_universe30_20260429.json` completed with `14` candidates and `0` promotion passes. The best-quality candidate was `event_rule_v2_base_global_lte120` (`31` trades, `15.4676R`, `0.499R`, `pf=2.7134`, `max_drawdown=2.3784R`, holdout `9.2679R`), but it failed trade count, fold stability, and symbol concentration. The broadest near miss was `event_rule_v2_base_funding_taker` (`76` trades, `9.2051R`, `0.1211R`, `pf=1.3122`, `max_drawdown=4.0306R`, `4/5` positive folds), but holdout was slightly negative and trade count remained below `80`. Conclusion: the diagnostic filters improve quality, especially global-account bias <= `1.20`, but they are not standalone promotable strategies and should not change the paper setup.
+
+Next test: integrate the global-account lead back into the scorecard instead of treating it as a standalone rule. The `ai_scorecard_v2_global_sweep` family varies score threshold (`6`/`7`), global account ratio caps (`1.20`, `1.35`, `1.50`), OI ablation, and top-trader-position cap (`1.60`) around the already passing scorecard strategies. This checks whether global-bias filtering can improve robustness without collapsing trade count.
+
+```powershell
+python scripts\research_harness.py --candidate-family ai_scorecard_v2_global_sweep --trigger-limit 12000 --universe-limit 30 --workers 2 --json-out tmp\research_runs\ai_scorecard_v2_global_sweep_universe30_20260429.json
+```
+
+Full result: `tmp/research_runs/ai_scorecard_v2_global_sweep_universe30_20260429.json` completed with `14` candidates and `0` promotion passes. All candidates had positive holdout and strong aggregate quality, but every variant failed the trade-count gate and fold-stability gate. The top candidate was `ai_score_global_oi_s7_g150_toppos160` with `26` OOS trades, `20.1227R` net, `0.7739R` average, `pf=6.5461`, `max_drawdown=1.3108R`, holdout `8.5304R`, and `3/5` positive folds. The broader best score-6 branch, `ai_score_global_oi_s6_g150`, still reached only `39` trades with `3/5` positive folds. Conclusion: global-bias and top-position caps sharply improve quality but collapse coverage too far to promote. No runtime or paper-bot change is warranted.
+
+## Runtime Telemetry Archive
+
+Implemented on April 29, 2026 to make future analysis less dependent on ad hoc `tmp/` caches. The Rust runtime now creates SQLite archive tables for ticker snapshots, recent `1m/15m/1h/4h` candles, USD-M funding rows, USD-M futures metric rows, and `SignalAssistant` scorecard evaluations. The worker is low-frequency by default (`RUNTIME_TELEMETRY_INTERVAL_SECONDS=900`) and uses upserts so repeated cycles refresh recent rows instead of duplicating them.
+
+This is infrastructure only. It does not change `ai_score_v2_base_score7` or `ai_score_v2_ablate_oi`, does not promote research candidates, and does not add live exchange execution.

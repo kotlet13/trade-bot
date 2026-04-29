@@ -34,7 +34,12 @@ const DEFAULT_AUTO_PAPER_INTERVAL_SECONDS: u64 = 60;
 const DEFAULT_AUTO_PAPER_MAX_OPEN_SLOTS: usize = 1;
 const DEFAULT_AUTO_PAPER_MAX_DAILY_ENTRIES: usize = 3;
 const DEFAULT_AUTO_PAPER_MAX_DAILY_LOSS_PERCENT: f64 = 2.0;
+const DEFAULT_RUNTIME_TELEMETRY_INTERVAL_SECONDS: u64 = 900;
+const DEFAULT_RUNTIME_TELEMETRY_CANDLE_LIMIT: usize = 240;
+const DEFAULT_RUNTIME_TELEMETRY_FUNDING_LOOKBACK_HOURS: f64 = 72.0;
+const TELEMETRY_CANDLE_INTERVALS: &[&str] = &["1m", "15m", "1h", "4h"];
 const ACTIVE_PAPER_STRATEGY_VERSION: &str = "ai_score_v2_base_score7";
+const SECONDARY_PAPER_STRATEGY_VERSION: &str = "ai_score_v2_ablate_oi";
 const ACTIVE_PAPER_STRATEGY_MIN_SCORE: i32 = 7;
 const ACTIVE_PAPER_STRATEGY_MIN_STOP_PCT: f64 = 0.004;
 const ACTIVE_PAPER_STRATEGY_MAX_FEE_DRAG_R: f64 = 0.45;
@@ -62,6 +67,41 @@ const BEA_RELEASE_SCHEDULE_URL: &str = "https://apps.bea.gov/API/signup/release_
 const FED_MONETARY_RSS_URL: &str = "https://www.federalreserve.gov/feeds/press_monetary.xml";
 const SEC_PRESS_RSS_URL: &str = "https://www.sec.gov/news/pressreleases.rss";
 const COINDESK_RSS_URL: &str = "https://www.coindesk.com/arc/outboundfeeds/rss";
+const NO_DISABLED_SCORE_COMPONENTS: &[&str] = &[];
+const OI_DISABLED_SCORE_COMPONENTS: &[&str] = &["oi"];
+
+#[derive(Debug, Clone, Copy)]
+struct PaperStrategy {
+    version: &'static str,
+    role: &'static str,
+    min_score: i32,
+    disabled_score_components: &'static [&'static str],
+}
+
+impl PaperStrategy {
+    fn disables_score_component(self, component: &str) -> bool {
+        self.disabled_score_components
+            .iter()
+            .any(|disabled| *disabled == component)
+    }
+}
+
+const PRIMARY_PAPER_STRATEGY: PaperStrategy = PaperStrategy {
+    version: ACTIVE_PAPER_STRATEGY_VERSION,
+    role: "primary",
+    min_score: ACTIVE_PAPER_STRATEGY_MIN_SCORE,
+    disabled_score_components: NO_DISABLED_SCORE_COMPONENTS,
+};
+
+const SECONDARY_PAPER_STRATEGY: PaperStrategy = PaperStrategy {
+    version: SECONDARY_PAPER_STRATEGY_VERSION,
+    role: "secondary",
+    min_score: ACTIVE_PAPER_STRATEGY_MIN_SCORE,
+    disabled_score_components: OI_DISABLED_SCORE_COMPONENTS,
+};
+
+const APPROVED_PAPER_STRATEGIES: &[PaperStrategy] =
+    &[PRIMARY_PAPER_STRATEGY, SECONDARY_PAPER_STRATEGY];
 
 #[derive(Clone)]
 struct AppState {
@@ -72,6 +112,7 @@ struct AppState {
     paper_fee_bps: f64,
     news_cache: Arc<Mutex<HashMap<String, CachedNewsStatus>>>,
     auto_paper: AutoPaperConfig,
+    telemetry: RuntimeTelemetryConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -81,6 +122,15 @@ struct AutoPaperConfig {
     max_open_slots: usize,
     max_daily_entries: usize,
     max_daily_loss_percent: f64,
+}
+
+#[derive(Debug, Clone)]
+struct RuntimeTelemetryConfig {
+    enabled: bool,
+    interval_seconds: u64,
+    candle_limit: usize,
+    futures_enabled: bool,
+    signal_evaluations_enabled: bool,
 }
 
 #[derive(Debug)]
@@ -249,6 +299,7 @@ struct DashboardResponse {
     candles: Vec<Candle>,
     paper: PaperSnapshot,
     signal_assistant: SignalAssistant,
+    secondary_signal_assistants: Vec<SignalAssistant>,
 }
 
 #[derive(Debug, Serialize)]
@@ -592,10 +643,14 @@ struct BinanceFundingRate {
     funding_time: serde_json::Value,
     #[serde(rename = "fundingRate")]
     funding_rate: String,
+    #[serde(rename = "markPrice")]
+    mark_price: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
 struct BinanceOpenInterestHist {
+    #[serde(rename = "sumOpenInterest")]
+    sum_open_interest: Option<String>,
     #[serde(rename = "sumOpenInterestValue")]
     sum_open_interest_value: String,
     timestamp: serde_json::Value,
@@ -662,6 +717,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or(DEFAULT_AUTO_PAPER_MAX_DAILY_LOSS_PERCENT)
             .max(0.1),
     };
+    let telemetry = RuntimeTelemetryConfig {
+        enabled: env_bool("RUNTIME_TELEMETRY_ENABLED", true),
+        interval_seconds: env::var("RUNTIME_TELEMETRY_INTERVAL_SECONDS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(DEFAULT_RUNTIME_TELEMETRY_INTERVAL_SECONDS)
+            .max(60),
+        candle_limit: env::var("RUNTIME_TELEMETRY_CANDLE_LIMIT")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(DEFAULT_RUNTIME_TELEMETRY_CANDLE_LIMIT)
+            .clamp(10, 1000),
+        futures_enabled: env_bool("RUNTIME_TELEMETRY_FUTURES_ENABLED", true),
+        signal_evaluations_enabled: env_bool("RUNTIME_TELEMETRY_SIGNAL_EVALUATIONS", true),
+    };
     let data_dir = env::var("DATA_DIR").unwrap_or_else(|_| "./data".to_string());
     let db_path = Path::new(&data_dir).join("tradebot.db");
 
@@ -680,7 +750,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         paper_fee_bps: fee_bps,
         news_cache: Arc::new(Mutex::new(HashMap::new())),
         auto_paper,
+        telemetry,
     };
+
+    if shared_state.telemetry.enabled {
+        let telemetry_state = shared_state.clone();
+        tokio::spawn(async move {
+            runtime_telemetry_worker(telemetry_state).await;
+        });
+    }
 
     if shared_state.auto_paper.enabled {
         let auto_state = shared_state.clone();
@@ -731,6 +809,8 @@ async fn get_dashboard(
 
     let tickers = fetch_tickers(&state.client, &state.watchlist).await?;
     let candles = fetch_candles(&state.client, &symbol, &interval, 120).await?;
+    persist_market_tickers_if_enabled(&state, &tickers, now);
+    persist_candles_if_enabled(&state, &symbol, &interval, &candles, now);
     let prices: HashMap<String, f64> = tickers
         .iter()
         .map(|ticker| (ticker.symbol.clone(), ticker.last_price))
@@ -749,7 +829,7 @@ async fn get_dashboard(
         .copied()
         .or_else(|| candles.last().map(|candle| candle.close))
         .unwrap_or_default();
-    let signal_assistant = match build_signal_assistant(
+    let mut signal_assistants = match build_signal_assistants(
         &state.client,
         &state.news_cache,
         &state.watchlist,
@@ -758,12 +838,30 @@ async fn get_dashboard(
         paper.cash_balance,
         paper.fee_bps,
         now,
+        APPROVED_PAPER_STRATEGIES,
     )
     .await
     {
-        Ok(signal) => signal,
-        Err(error) => unavailable_signal_assistant(&symbol, now, error.message),
+        Ok(signals) => signals,
+        Err(error) => APPROVED_PAPER_STRATEGIES
+            .iter()
+            .map(|strategy| {
+                unavailable_signal_assistant(*strategy, &symbol, now, error.message.clone())
+            })
+            .collect(),
     };
+    persist_signal_evaluations_if_enabled(&state, &signal_assistants, now);
+    let signal_assistant = if signal_assistants.is_empty() {
+        unavailable_signal_assistant(
+            PRIMARY_PAPER_STRATEGY,
+            &symbol,
+            now,
+            "No paper strategies are configured.".to_string(),
+        )
+    } else {
+        signal_assistants.remove(0)
+    };
+    let secondary_signal_assistants = signal_assistants;
 
     Ok(Json(DashboardResponse {
         watchlist: state.watchlist.clone(),
@@ -774,6 +872,7 @@ async fn get_dashboard(
         candles,
         paper,
         signal_assistant,
+        secondary_signal_assistants,
     }))
 }
 
@@ -1086,8 +1185,12 @@ fn initialize_database(
     starting_cash: f64,
     fee_bps: f64,
 ) -> Result<(), ApiError> {
+    connection.busy_timeout(Duration::from_secs(5))?;
     connection.execute_batch(
         "
+        PRAGMA journal_mode = WAL;
+        PRAGMA synchronous = NORMAL;
+
         CREATE TABLE IF NOT EXISTS account (
             id INTEGER PRIMARY KEY CHECK (id = 1),
             initial_cash REAL NOT NULL,
@@ -1164,6 +1267,99 @@ fn initialize_database(
 
         CREATE INDEX IF NOT EXISTS idx_auto_paper_decisions_created_at
             ON auto_paper_decisions(created_at);
+
+        CREATE TABLE IF NOT EXISTS telemetry_market_tickers (
+            symbol TEXT NOT NULL,
+            snapshot_time INTEGER NOT NULL,
+            last_price REAL NOT NULL,
+            price_change_percent REAL NOT NULL,
+            high_price REAL NOT NULL,
+            low_price REAL NOT NULL,
+            volume REAL NOT NULL,
+            quote_volume REAL NOT NULL,
+            source TEXT NOT NULL,
+            PRIMARY KEY(symbol, snapshot_time)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_telemetry_market_tickers_snapshot_time
+            ON telemetry_market_tickers(snapshot_time);
+
+        CREATE TABLE IF NOT EXISTS telemetry_candles (
+            symbol TEXT NOT NULL,
+            interval TEXT NOT NULL,
+            open_time INTEGER NOT NULL,
+            open REAL NOT NULL,
+            high REAL NOT NULL,
+            low REAL NOT NULL,
+            close REAL NOT NULL,
+            volume REAL NOT NULL,
+            fetched_at INTEGER NOT NULL,
+            source TEXT NOT NULL,
+            PRIMARY KEY(symbol, interval, open_time)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_telemetry_candles_symbol_interval_time
+            ON telemetry_candles(symbol, interval, open_time);
+
+        CREATE TABLE IF NOT EXISTS telemetry_funding_rates (
+            symbol TEXT NOT NULL,
+            funding_time INTEGER NOT NULL,
+            funding_rate_bps REAL NOT NULL,
+            mark_price REAL,
+            fetched_at INTEGER NOT NULL,
+            source TEXT NOT NULL,
+            PRIMARY KEY(symbol, funding_time)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_telemetry_funding_rates_time
+            ON telemetry_funding_rates(funding_time);
+
+        CREATE TABLE IF NOT EXISTS telemetry_futures_metric_rows (
+            symbol TEXT NOT NULL,
+            metric_name TEXT NOT NULL,
+            timestamp INTEGER NOT NULL,
+            period TEXT NOT NULL,
+            long_short_ratio REAL,
+            buy_sell_ratio REAL,
+            sum_open_interest REAL,
+            sum_open_interest_value REAL,
+            fetched_at INTEGER NOT NULL,
+            source TEXT NOT NULL,
+            PRIMARY KEY(symbol, metric_name, timestamp)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_telemetry_futures_metric_rows_time
+            ON telemetry_futures_metric_rows(metric_name, timestamp);
+
+        CREATE TABLE IF NOT EXISTS telemetry_signal_evaluations (
+            strategy_version TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            signal_close_time INTEGER NOT NULL,
+            generated_at INTEGER NOT NULL,
+            captured_at INTEGER NOT NULL,
+            stage TEXT NOT NULL,
+            technical_stage TEXT NOT NULL,
+            bias TEXT NOT NULL,
+            confidence INTEGER NOT NULL,
+            ai_score INTEGER NOT NULL,
+            summary TEXT NOT NULL,
+            has_risk_plan INTEGER NOT NULL,
+            entry_price REAL,
+            stop_loss REAL,
+            take_profit_1 REAL,
+            take_profit_2 REAL,
+            suggested_quantity REAL,
+            risk_amount REAL,
+            failed_checks_json TEXT NOT NULL,
+            checklist_json TEXT NOT NULL,
+            warnings_json TEXT NOT NULL,
+            journal_tags_json TEXT NOT NULL,
+            source TEXT NOT NULL,
+            PRIMARY KEY(strategy_version, symbol, signal_close_time)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_telemetry_signal_evaluations_generated_at
+            ON telemetry_signal_evaluations(generated_at);
         ",
     )?;
     ensure_column(connection, "auto_paper_decisions", "entry_price", "REAL")?;
@@ -1508,8 +1704,8 @@ fn process_price_events(
 
 async fn auto_paper_worker(state: AppState) {
     println!(
-        "auto-paper worker enabled: strategy={}, interval={}s, max_open_slots={}, max_daily_entries={}, max_daily_loss={:.2}%",
-        ACTIVE_PAPER_STRATEGY_VERSION,
+        "auto-paper worker enabled: strategies={}, interval={}s, max_open_slots={}, max_daily_entries={}, max_daily_loss={:.2}%",
+        approved_paper_strategy_versions(),
         state.auto_paper.interval_seconds,
         state.auto_paper.max_open_slots,
         state.auto_paper.max_daily_entries,
@@ -1525,6 +1721,14 @@ async fn auto_paper_worker(state: AppState) {
             eprintln!("auto-paper cycle failed: {}", error.message);
         }
     }
+}
+
+fn approved_paper_strategy_versions() -> String {
+    APPROVED_PAPER_STRATEGIES
+        .iter()
+        .map(|strategy| strategy.version)
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 async fn run_auto_paper_cycle(state: &AppState) -> Result<(), ApiError> {
@@ -1561,7 +1765,7 @@ async fn run_auto_paper_cycle(state: &AppState) -> Result<(), ApiError> {
             continue;
         };
 
-        let signal = build_signal_assistant(
+        let signals = build_signal_assistants(
             &state.client,
             &state.news_cache,
             &state.watchlist,
@@ -1570,90 +1774,95 @@ async fn run_auto_paper_cycle(state: &AppState) -> Result<(), ApiError> {
             stats.cash_balance,
             stats.fee_bps,
             now,
+            APPROVED_PAPER_STRATEGIES,
         )
         .await?;
 
-        let Some(risk_plan) = signal.risk_plan.clone() else {
-            if matches!(signal.technical_stage, SignalStage::Ready) {
-                let db = state
+        persist_signal_evaluations_if_enabled(state, &signals, now);
+
+        for signal in signals {
+            let Some(risk_plan) = signal.risk_plan.clone() else {
+                if matches!(signal.technical_stage, SignalStage::Ready) {
+                    let db = state
+                        .db
+                        .lock()
+                        .map_err(|_| ApiError::internal("Paper database lock is poisoned."))?;
+                    let reason = auto_paper_rejection_reason(&signal);
+                    insert_auto_paper_decision(&db, &signal, "rejected", Some(&reason), now)?;
+                }
+                continue;
+            };
+
+            let entry_result = {
+                let mut db = state
                     .db
                     .lock()
                     .map_err(|_| ApiError::internal("Paper database lock is poisoned."))?;
-                let reason = auto_paper_rejection_reason(&signal);
-                insert_auto_paper_decision(&db, &signal, "rejected", Some(&reason), now)?;
-            }
-            continue;
-        };
+                process_price_events(&mut db, &prices, now)?;
+                stats = load_auto_paper_cycle_stats(&db, now)?;
 
-        let entry_result = {
-            let mut db = state
-                .db
-                .lock()
-                .map_err(|_| ApiError::internal("Paper database lock is poisoned."))?;
-            process_price_events(&mut db, &prices, now)?;
-            stats = load_auto_paper_cycle_stats(&db, now)?;
+                if auto_paper_caps_blocked(&state.auto_paper, &stats) {
+                    return Ok(());
+                }
 
-            if auto_paper_caps_blocked(&state.auto_paper, &stats) {
+                if !insert_auto_paper_entry_attempt(&db, &signal, now)? {
+                    continue;
+                }
+
+                let affordable_quantity =
+                    max_affordable_quantity(stats.cash_balance, current_price, stats.fee_bps);
+                let quantity = risk_plan.suggested_quantity.min(affordable_quantity);
+                if quantity <= 0.0 || !quantity.is_finite() {
+                    update_auto_paper_decision_failure(
+                        &db,
+                        &signal,
+                        "No affordable paper quantity at execution time.",
+                    )?;
+                    continue;
+                }
+
+                let note = Some(format!(
+                    "AUTO_PAPER {} | signal_close={} | ai_score={} | {}",
+                    signal.strategy_version,
+                    format_utc_time(signal.signal_close_time),
+                    signal.ai_score,
+                    signal.summary
+                ));
+                let trade = execute_trade(
+                    &mut db,
+                    TradeExecution {
+                        symbol: symbol.clone(),
+                        side: OrderSide::Buy,
+                        quantity,
+                        price: current_price,
+                        note,
+                        source: "AUTO_PAPER_MARKET".to_string(),
+                        source_order_id: None,
+                        attached_stop_loss: Some(risk_plan.stop_loss),
+                        attached_take_profit: Some(risk_plan.take_profit_1),
+                        executed_at: now,
+                    },
+                );
+
+                match trade {
+                    Ok(trade) => {
+                        update_auto_paper_decision_trade(&db, &signal, &trade, &risk_plan)?;
+                        Ok(Some(trade))
+                    }
+                    Err(error) => {
+                        update_auto_paper_decision_failure(&db, &signal, &error.message)?;
+                        Err(error)
+                    }
+                }
+            }?;
+
+            if let Some(trade) = entry_result {
+                println!(
+                    "auto-paper entered {} qty {:.6} @ {:.4} using {}",
+                    trade.symbol, trade.quantity, trade.price, signal.strategy_version
+                );
                 return Ok(());
             }
-
-            if !insert_auto_paper_entry_attempt(&db, &signal, now)? {
-                continue;
-            }
-
-            let affordable_quantity =
-                max_affordable_quantity(stats.cash_balance, current_price, stats.fee_bps);
-            let quantity = risk_plan.suggested_quantity.min(affordable_quantity);
-            if quantity <= 0.0 || !quantity.is_finite() {
-                update_auto_paper_decision_failure(
-                    &db,
-                    &signal,
-                    "No affordable paper quantity at execution time.",
-                )?;
-                continue;
-            }
-
-            let note = Some(format!(
-                "AUTO_PAPER {} | signal_close={} | ai_score={} | {}",
-                signal.strategy_version,
-                format_utc_time(signal.signal_close_time),
-                signal.ai_score,
-                signal.summary
-            ));
-            let trade = execute_trade(
-                &mut db,
-                TradeExecution {
-                    symbol: symbol.clone(),
-                    side: OrderSide::Buy,
-                    quantity,
-                    price: current_price,
-                    note,
-                    source: "AUTO_PAPER_MARKET".to_string(),
-                    source_order_id: None,
-                    attached_stop_loss: Some(risk_plan.stop_loss),
-                    attached_take_profit: Some(risk_plan.take_profit_1),
-                    executed_at: now,
-                },
-            );
-
-            match trade {
-                Ok(trade) => {
-                    update_auto_paper_decision_trade(&db, &signal, &trade, &risk_plan)?;
-                    Ok(Some(trade))
-                }
-                Err(error) => {
-                    update_auto_paper_decision_failure(&db, &signal, &error.message)?;
-                    Err(error)
-                }
-            }
-        }?;
-
-        if let Some(trade) = entry_result {
-            println!(
-                "auto-paper entered {} qty {:.6} @ {:.4} using {}",
-                trade.symbol, trade.quantity, trade.price, ACTIVE_PAPER_STRATEGY_VERSION
-            );
-            break;
         }
     }
 
@@ -1839,6 +2048,509 @@ fn update_auto_paper_decision_failure(
             signal.signal_close_time
         ],
     )?;
+    Ok(())
+}
+
+async fn runtime_telemetry_worker(state: AppState) {
+    println!(
+        "runtime telemetry enabled: interval={}s, candle_limit={}, futures={}, signal_evaluations={}",
+        state.telemetry.interval_seconds,
+        state.telemetry.candle_limit,
+        state.telemetry.futures_enabled,
+        state.telemetry.signal_evaluations_enabled
+    );
+
+    let mut ticker = tokio::time::interval(Duration::from_secs(state.telemetry.interval_seconds));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    loop {
+        ticker.tick().await;
+        if let Err(error) = run_runtime_telemetry_cycle(&state).await {
+            eprintln!("runtime telemetry cycle failed: {}", error.message);
+        }
+    }
+}
+
+async fn run_runtime_telemetry_cycle(state: &AppState) -> Result<(), ApiError> {
+    if !state.telemetry.enabled {
+        return Ok(());
+    }
+
+    let captured_at = Utc::now().timestamp_millis();
+    let tickers = fetch_tickers(&state.client, &state.watchlist).await?;
+    persist_market_tickers_if_enabled(state, &tickers, captured_at);
+
+    for symbol in &state.watchlist {
+        for interval in TELEMETRY_CANDLE_INTERVALS {
+            match fetch_candles(
+                &state.client,
+                symbol,
+                interval,
+                state.telemetry.candle_limit,
+            )
+            .await
+            {
+                Ok(candles) => {
+                    persist_candles_if_enabled(state, symbol, interval, &candles, captured_at);
+                }
+                Err(error) => eprintln!(
+                    "runtime telemetry candle archive skipped {symbol} {interval}: {}",
+                    error.message
+                ),
+            }
+        }
+
+        if state.telemetry.futures_enabled && symbol != BTC_REFERENCE_SYMBOL {
+            archive_symbol_futures_telemetry(state, symbol, captured_at).await;
+        }
+    }
+
+    Ok(())
+}
+
+async fn archive_symbol_futures_telemetry(state: &AppState, symbol: &str, captured_at: i64) {
+    let funding_lookback_ms =
+        (DEFAULT_RUNTIME_TELEMETRY_FUNDING_LOOKBACK_HOURS * 60.0 * 60.0 * 1000.0) as i64;
+    let funding_start = captured_at.saturating_sub(funding_lookback_ms);
+
+    match fetch_funding_rate_rows(&state.client, symbol, funding_start, captured_at, 1000).await {
+        Ok(rows) => persist_funding_rates_if_enabled(state, &rows, captured_at),
+        Err(error) => eprintln!(
+            "runtime telemetry funding archive skipped {symbol}: {}",
+            error.message
+        ),
+    }
+
+    match fetch_open_interest_rows(&state.client, symbol, 300).await {
+        Ok(rows) => persist_open_interest_rows_if_enabled(state, symbol, &rows, captured_at),
+        Err(error) => eprintln!(
+            "runtime telemetry open-interest archive skipped {symbol}: {}",
+            error.message
+        ),
+    }
+
+    let ratio_specs = [
+        (
+            "global_long_short_account_ratio",
+            "/futures/data/globalLongShortAccountRatio",
+        ),
+        (
+            "top_long_short_position_ratio",
+            "/futures/data/topLongShortPositionRatio",
+        ),
+        (
+            "taker_long_short_ratio",
+            "/futures/data/takerlongshortRatio",
+        ),
+    ];
+    for (metric_name, path) in ratio_specs {
+        match fetch_futures_ratio_rows(&state.client, path, symbol, 300).await {
+            Ok(rows) => persist_futures_ratio_rows_if_enabled(
+                state,
+                symbol,
+                metric_name,
+                &rows,
+                captured_at,
+            ),
+            Err(error) => eprintln!(
+                "runtime telemetry {metric_name} archive skipped {symbol}: {}",
+                error.message
+            ),
+        }
+    }
+}
+
+fn persist_market_tickers_if_enabled(
+    state: &AppState,
+    tickers: &[TickerSummary],
+    captured_at: i64,
+) {
+    if !state.telemetry.enabled {
+        return;
+    }
+
+    let result = state
+        .db
+        .lock()
+        .map_err(|_| ApiError::internal("Paper database lock is poisoned."))
+        .and_then(|db| insert_telemetry_market_tickers(&db, tickers, captured_at));
+    if let Err(error) = result {
+        eprintln!("runtime telemetry ticker archive failed: {}", error.message);
+    }
+}
+
+fn persist_candles_if_enabled(
+    state: &AppState,
+    symbol: &str,
+    interval: &str,
+    candles: &[Candle],
+    captured_at: i64,
+) {
+    if !state.telemetry.enabled {
+        return;
+    }
+
+    let result = state
+        .db
+        .lock()
+        .map_err(|_| ApiError::internal("Paper database lock is poisoned."))
+        .and_then(|db| insert_telemetry_candles(&db, symbol, interval, candles, captured_at));
+    if let Err(error) = result {
+        eprintln!(
+            "runtime telemetry candle archive failed for {symbol} {interval}: {}",
+            error.message
+        );
+    }
+}
+
+fn persist_funding_rates_if_enabled(
+    state: &AppState,
+    rows: &[BinanceFundingRate],
+    captured_at: i64,
+) {
+    if !state.telemetry.enabled || !state.telemetry.futures_enabled {
+        return;
+    }
+
+    let result = state
+        .db
+        .lock()
+        .map_err(|_| ApiError::internal("Paper database lock is poisoned."))
+        .and_then(|db| insert_telemetry_funding_rates(&db, rows, captured_at));
+    if let Err(error) = result {
+        eprintln!(
+            "runtime telemetry funding archive failed: {}",
+            error.message
+        );
+    }
+}
+
+fn persist_open_interest_rows_if_enabled(
+    state: &AppState,
+    symbol: &str,
+    rows: &[BinanceOpenInterestHist],
+    captured_at: i64,
+) {
+    if !state.telemetry.enabled || !state.telemetry.futures_enabled {
+        return;
+    }
+
+    let result = state
+        .db
+        .lock()
+        .map_err(|_| ApiError::internal("Paper database lock is poisoned."))
+        .and_then(|db| insert_telemetry_open_interest_rows(&db, symbol, rows, captured_at));
+    if let Err(error) = result {
+        eprintln!(
+            "runtime telemetry open-interest archive failed for {symbol}: {}",
+            error.message
+        );
+    }
+}
+
+fn persist_futures_ratio_rows_if_enabled(
+    state: &AppState,
+    symbol: &str,
+    metric_name: &str,
+    rows: &[BinanceRatioRow],
+    captured_at: i64,
+) {
+    if !state.telemetry.enabled || !state.telemetry.futures_enabled {
+        return;
+    }
+
+    let result = state
+        .db
+        .lock()
+        .map_err(|_| ApiError::internal("Paper database lock is poisoned."))
+        .and_then(|db| {
+            insert_telemetry_futures_ratio_rows(&db, symbol, metric_name, rows, captured_at)
+        });
+    if let Err(error) = result {
+        eprintln!(
+            "runtime telemetry {metric_name} archive failed for {symbol}: {}",
+            error.message
+        );
+    }
+}
+
+fn persist_signal_evaluations_if_enabled(
+    state: &AppState,
+    signals: &[SignalAssistant],
+    captured_at: i64,
+) {
+    if !state.telemetry.enabled || !state.telemetry.signal_evaluations_enabled {
+        return;
+    }
+
+    let result = state
+        .db
+        .lock()
+        .map_err(|_| ApiError::internal("Paper database lock is poisoned."))
+        .and_then(|db| insert_telemetry_signal_evaluations(&db, signals, captured_at));
+    if let Err(error) = result {
+        eprintln!(
+            "runtime telemetry signal evaluation archive failed: {}",
+            error.message
+        );
+    }
+}
+
+fn insert_telemetry_market_tickers(
+    connection: &Connection,
+    tickers: &[TickerSummary],
+    captured_at: i64,
+) -> Result<(), ApiError> {
+    let tx = connection.unchecked_transaction()?;
+    for ticker in tickers {
+        tx.execute(
+            "INSERT INTO telemetry_market_tickers (
+                symbol, snapshot_time, last_price, price_change_percent,
+                high_price, low_price, volume, quote_volume, source
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'binance_spot_24hr')
+             ON CONFLICT(symbol, snapshot_time) DO UPDATE SET
+                last_price = excluded.last_price,
+                price_change_percent = excluded.price_change_percent,
+                high_price = excluded.high_price,
+                low_price = excluded.low_price,
+                volume = excluded.volume,
+                quote_volume = excluded.quote_volume,
+                source = excluded.source",
+            params![
+                &ticker.symbol,
+                captured_at,
+                ticker.last_price,
+                ticker.price_change_percent,
+                ticker.high_price,
+                ticker.low_price,
+                ticker.volume,
+                ticker.quote_volume,
+            ],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+fn insert_telemetry_candles(
+    connection: &Connection,
+    symbol: &str,
+    interval: &str,
+    candles: &[Candle],
+    captured_at: i64,
+) -> Result<(), ApiError> {
+    let tx = connection.unchecked_transaction()?;
+    for candle in candles {
+        tx.execute(
+            "INSERT INTO telemetry_candles (
+                symbol, interval, open_time, open, high, low, close, volume,
+                fetched_at, source
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'binance_spot_klines')
+             ON CONFLICT(symbol, interval, open_time) DO UPDATE SET
+                open = excluded.open,
+                high = excluded.high,
+                low = excluded.low,
+                close = excluded.close,
+                volume = excluded.volume,
+                fetched_at = excluded.fetched_at,
+                source = excluded.source",
+            params![
+                symbol,
+                interval,
+                candle.open_time,
+                candle.open,
+                candle.high,
+                candle.low,
+                candle.close,
+                candle.volume,
+                captured_at,
+            ],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+fn insert_telemetry_funding_rates(
+    connection: &Connection,
+    rows: &[BinanceFundingRate],
+    captured_at: i64,
+) -> Result<(), ApiError> {
+    let tx = connection.unchecked_transaction()?;
+    for row in rows {
+        let funding_time = parse_json_i64(&row.funding_time)?;
+        let funding_rate_bps = parse_f64(&row.funding_rate)? * 10_000.0;
+        let mark_price = parse_optional_f64(row.mark_price.as_deref())?;
+        tx.execute(
+            "INSERT INTO telemetry_funding_rates (
+                symbol, funding_time, funding_rate_bps, mark_price, fetched_at, source
+             ) VALUES (?1, ?2, ?3, ?4, ?5, 'binance_usdm_funding_rate')
+             ON CONFLICT(symbol, funding_time) DO UPDATE SET
+                funding_rate_bps = excluded.funding_rate_bps,
+                mark_price = excluded.mark_price,
+                fetched_at = excluded.fetched_at,
+                source = excluded.source",
+            params![
+                &row.symbol,
+                funding_time,
+                funding_rate_bps,
+                mark_price,
+                captured_at,
+            ],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+fn insert_telemetry_open_interest_rows(
+    connection: &Connection,
+    symbol: &str,
+    rows: &[BinanceOpenInterestHist],
+    captured_at: i64,
+) -> Result<(), ApiError> {
+    let tx = connection.unchecked_transaction()?;
+    for row in rows {
+        let timestamp = parse_json_i64(&row.timestamp)?;
+        let sum_open_interest = parse_optional_f64(row.sum_open_interest.as_deref())?;
+        let sum_open_interest_value = parse_f64(&row.sum_open_interest_value)?;
+        tx.execute(
+            "INSERT INTO telemetry_futures_metric_rows (
+                symbol, metric_name, timestamp, period, long_short_ratio,
+                buy_sell_ratio, sum_open_interest, sum_open_interest_value,
+                fetched_at, source
+             ) VALUES (?1, 'open_interest_hist', ?2, '5m', NULL, NULL, ?3, ?4, ?5, 'binance_usdm_open_interest_hist')
+             ON CONFLICT(symbol, metric_name, timestamp) DO UPDATE SET
+                sum_open_interest = excluded.sum_open_interest,
+                sum_open_interest_value = excluded.sum_open_interest_value,
+                fetched_at = excluded.fetched_at,
+                source = excluded.source",
+            params![
+                symbol,
+                timestamp,
+                sum_open_interest,
+                sum_open_interest_value,
+                captured_at,
+            ],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+fn insert_telemetry_futures_ratio_rows(
+    connection: &Connection,
+    symbol: &str,
+    metric_name: &str,
+    rows: &[BinanceRatioRow],
+    captured_at: i64,
+) -> Result<(), ApiError> {
+    let tx = connection.unchecked_transaction()?;
+    for row in rows {
+        let timestamp = parse_json_i64(&row.timestamp)?;
+        let long_short_ratio = parse_optional_f64(row.long_short_ratio.as_deref())?;
+        let buy_sell_ratio = parse_optional_f64(row.buy_sell_ratio.as_deref())?;
+        tx.execute(
+            "INSERT INTO telemetry_futures_metric_rows (
+                symbol, metric_name, timestamp, period, long_short_ratio,
+                buy_sell_ratio, sum_open_interest, sum_open_interest_value,
+                fetched_at, source
+             ) VALUES (?1, ?2, ?3, '5m', ?4, ?5, NULL, NULL, ?6, 'binance_usdm_futures_data')
+             ON CONFLICT(symbol, metric_name, timestamp) DO UPDATE SET
+                long_short_ratio = excluded.long_short_ratio,
+                buy_sell_ratio = excluded.buy_sell_ratio,
+                fetched_at = excluded.fetched_at,
+                source = excluded.source",
+            params![
+                symbol,
+                metric_name,
+                timestamp,
+                long_short_ratio,
+                buy_sell_ratio,
+                captured_at,
+            ],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+fn insert_telemetry_signal_evaluations(
+    connection: &Connection,
+    signals: &[SignalAssistant],
+    captured_at: i64,
+) -> Result<(), ApiError> {
+    let tx = connection.unchecked_transaction()?;
+    for signal in signals {
+        let failed_checks = signal
+            .checklist
+            .iter()
+            .filter(|check| !check.passed)
+            .map(|check| check.label.clone())
+            .collect::<Vec<_>>();
+        let failed_checks_json = to_json_string(&failed_checks)?;
+        let checklist_json = to_json_string(&signal.checklist)?;
+        let warnings_json = to_json_string(&signal.warnings)?;
+        let journal_tags_json = to_json_string(&signal.journal_tags)?;
+        let risk_plan = signal.risk_plan.as_ref();
+        tx.execute(
+            "INSERT INTO telemetry_signal_evaluations (
+                strategy_version, symbol, signal_close_time, generated_at, captured_at,
+                stage, technical_stage, bias, confidence, ai_score, summary,
+                has_risk_plan, entry_price, stop_loss, take_profit_1, take_profit_2,
+                suggested_quantity, risk_amount, failed_checks_json, checklist_json,
+                warnings_json, journal_tags_json, source
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+                       ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22,
+                       'runtime_signal_assistant')
+             ON CONFLICT(strategy_version, symbol, signal_close_time) DO UPDATE SET
+                generated_at = excluded.generated_at,
+                captured_at = excluded.captured_at,
+                stage = excluded.stage,
+                technical_stage = excluded.technical_stage,
+                bias = excluded.bias,
+                confidence = excluded.confidence,
+                ai_score = excluded.ai_score,
+                summary = excluded.summary,
+                has_risk_plan = excluded.has_risk_plan,
+                entry_price = excluded.entry_price,
+                stop_loss = excluded.stop_loss,
+                take_profit_1 = excluded.take_profit_1,
+                take_profit_2 = excluded.take_profit_2,
+                suggested_quantity = excluded.suggested_quantity,
+                risk_amount = excluded.risk_amount,
+                failed_checks_json = excluded.failed_checks_json,
+                checklist_json = excluded.checklist_json,
+                warnings_json = excluded.warnings_json,
+                journal_tags_json = excluded.journal_tags_json,
+                source = excluded.source",
+            params![
+                signal.strategy_version,
+                &signal.symbol,
+                signal.signal_close_time,
+                signal.generated_at,
+                captured_at,
+                signal.stage.as_label(),
+                signal.technical_stage.as_label(),
+                signal.bias.as_label(),
+                signal.confidence as i64,
+                signal.ai_score,
+                &signal.summary,
+                if risk_plan.is_some() { 1_i64 } else { 0_i64 },
+                risk_plan.map(|plan| plan.entry),
+                risk_plan.map(|plan| plan.stop_loss),
+                risk_plan.map(|plan| plan.take_profit_1),
+                risk_plan.map(|plan| plan.take_profit_2),
+                risk_plan.map(|plan| plan.suggested_quantity),
+                risk_plan.map(|plan| plan.risk_amount),
+                failed_checks_json,
+                checklist_json,
+                warnings_json,
+                journal_tags_json,
+            ],
+        )?;
+    }
+    tx.commit()?;
     Ok(())
 }
 
@@ -2369,28 +3081,7 @@ async fn fetch_latest_funding_bps(
 ) -> Result<Option<(f64, i64)>, ApiError> {
     let lookback_ms = (ACTIVE_PAPER_STRATEGY_FUNDING_MAX_AGE_HOURS * 60.0 * 60.0 * 1000.0) as i64;
     let start_time = signal_close_time.saturating_sub(lookback_ms);
-    let response = client
-        .get(format!("{BINANCE_FAPI_API}/fapi/v1/fundingRate"))
-        .query(&[
-            ("symbol", symbol.to_string()),
-            ("startTime", start_time.to_string()),
-            ("endTime", signal_close_time.to_string()),
-            ("limit", "1000".to_string()),
-        ])
-        .send()
-        .await
-        .map_err(|error| ApiError::upstream(format!("Failed to fetch funding rate: {error}")))?;
-
-    if !response.status().is_success() {
-        return Err(ApiError::upstream(format!(
-            "Funding request returned {} for {symbol}.",
-            response.status()
-        )));
-    }
-
-    let rows: Vec<BinanceFundingRate> = response.json().await.map_err(|error| {
-        ApiError::upstream(format!("Failed to decode funding payload: {error}"))
-    })?;
+    let rows = fetch_funding_rate_rows(client, symbol, start_time, signal_close_time, 1000).await?;
 
     let mut latest: Option<(f64, i64)> = None;
     for row in rows {
@@ -2411,6 +3102,39 @@ async fn fetch_latest_funding_bps(
     }
 
     Ok(latest)
+}
+
+async fn fetch_funding_rate_rows(
+    client: &Client,
+    symbol: &str,
+    start_time: i64,
+    end_time: i64,
+    limit: usize,
+) -> Result<Vec<BinanceFundingRate>, ApiError> {
+    let response = client
+        .get(format!("{BINANCE_FAPI_API}/fapi/v1/fundingRate"))
+        .query(&[
+            ("symbol", symbol.to_string()),
+            ("startTime", start_time.to_string()),
+            ("endTime", end_time.to_string()),
+            ("limit", limit.to_string()),
+        ])
+        .send()
+        .await
+        .map_err(|error| ApiError::upstream(format!("Failed to fetch funding rate: {error}")))?;
+
+    if !response.status().is_success() {
+        return Err(ApiError::upstream(format!(
+            "Funding request returned {} for {symbol}.",
+            response.status()
+        )));
+    }
+
+    let rows: Vec<BinanceFundingRate> = response.json().await.map_err(|error| {
+        ApiError::upstream(format!("Failed to decode funding payload: {error}"))
+    })?;
+
+    Ok(rows)
 }
 
 async fn fetch_futures_metric_snapshot(
@@ -2604,6 +3328,7 @@ async fn build_basket_snapshot(
 }
 
 fn evaluate_ai_scorecard_v2(
+    strategy: PaperStrategy,
     symbol: &str,
     signal_close_time: i64,
     trigger_slice: &[Candle],
@@ -2639,7 +3364,8 @@ fn evaluate_ai_scorecard_v2(
             label: "AI score v2".to_string(),
             passed: false,
             detail: format!(
-                "Score 0/{ACTIVE_PAPER_STRATEGY_MIN_SCORE}; scorecard se izracuna sele po veljavnem setup risk planu."
+                "Score 0/{min_score}; scorecard se izracuna sele po veljavnem setup risk planu.",
+                min_score = strategy.min_score
             ),
         });
         return AiScorecardEvaluation {
@@ -2839,14 +3565,25 @@ fn evaluate_ai_scorecard_v2(
                 Some(value) if value > 2.0 || value < -15.0 => -1,
                 _ => 0,
             };
-            score += oi_points;
+            let oi_ablated = strategy.disables_score_component("oi");
+            if !oi_ablated {
+                score += oi_points;
+            }
             components.push(SignalCheck {
                 label: "Score OI change".to_string(),
-                passed: oi_points >= 0,
-                detail: format!(
-                    "OI 24h change {}; {oi_points:+} point(s).",
-                    format_optional_signed_percent(metrics.open_interest_24h_change_pct)
-                ),
+                passed: oi_ablated || oi_points >= 0,
+                detail: if oi_ablated {
+                    format!(
+                        "OI 24h change {}; raw {oi_points:+} point(s), ignored by {}.",
+                        format_optional_signed_percent(metrics.open_interest_24h_change_pct),
+                        strategy.version
+                    )
+                } else {
+                    format!(
+                        "OI 24h change {}; {oi_points:+} point(s).",
+                        format_optional_signed_percent(metrics.open_interest_24h_change_pct)
+                    )
+                },
             });
 
             let global_points = if metrics.global_account_long_short_ratio <= 1.20 {
@@ -2895,14 +3632,15 @@ fn evaluate_ai_scorecard_v2(
         }
     }
 
-    if score < ACTIVE_PAPER_STRATEGY_MIN_SCORE {
+    if score < strategy.min_score {
         blockers.push("score_below_7".to_string());
     }
     components.push(SignalCheck {
         label: "AI score v2".to_string(),
-        passed: score >= ACTIVE_PAPER_STRATEGY_MIN_SCORE,
+        passed: score >= strategy.min_score,
         detail: format!(
-            "Score {score}/{ACTIVE_PAPER_STRATEGY_MIN_SCORE}; paper gate requires >= {ACTIVE_PAPER_STRATEGY_MIN_SCORE}."
+            "Score {score}/{min_score}; paper gate requires >= {min_score}.",
+            min_score = strategy.min_score
         ),
     });
 
@@ -3091,7 +3829,7 @@ fn utc_day_start_ms(timestamp_ms: i64) -> i64 {
         .unwrap_or(timestamp_ms)
 }
 
-async fn build_signal_assistant(
+async fn build_signal_assistants(
     client: &Client,
     news_cache: &Arc<Mutex<HashMap<String, CachedNewsStatus>>>,
     watchlist: &[String],
@@ -3100,7 +3838,8 @@ async fn build_signal_assistant(
     available_cash: f64,
     fee_bps: f64,
     generated_at: i64,
-) -> Result<SignalAssistant, ApiError> {
+    strategies: &[PaperStrategy],
+) -> Result<Vec<SignalAssistant>, ApiError> {
     let (trend_candles, setup_candles, trigger_candles) = tokio::try_join!(
         fetch_candles(client, symbol, "4h", 160),
         fetch_candles(client, symbol, "1h", 160),
@@ -3121,12 +3860,6 @@ async fn build_signal_assistant(
         .last()
         .map(|candle| candle.open_time + interval_millis("15m"))
         .unwrap_or(generated_at);
-    let stalk_ok = matches!(
-        evaluation.stage,
-        SignalStage::Stalk | SignalStage::Setup | SignalStage::Ready
-    );
-    let setup_ok = matches!(evaluation.stage, SignalStage::Setup | SignalStage::Ready);
-    let trigger_ok = matches!(evaluation.stage, SignalStage::Ready);
     let session_filter = evaluate_session_filter(signal_close_time);
     let mut btc_warning = None;
     let (btc_trend_candles, btc_trigger_candles) = if symbol == BTC_REFERENCE_SYMBOL {
@@ -3194,16 +3927,57 @@ async fn build_signal_assistant(
     if let Some(warning) = btc_warning {
         scorecard_context.warnings.push(warning);
     }
+
+    Ok(strategies
+        .iter()
+        .map(|strategy| {
+            build_signal_assistant_from_parts(
+                *strategy,
+                symbol,
+                generated_at,
+                signal_close_time,
+                available_cash,
+                fee_bps,
+                setup_closed,
+                trigger_closed,
+                btc_trend_closed,
+                &evaluation,
+                &session_filter,
+                &correlation_filter,
+                &news_filter,
+                &scorecard_context,
+            )
+        })
+        .collect())
+}
+
+fn build_signal_assistant_from_parts(
+    strategy: PaperStrategy,
+    symbol: &str,
+    generated_at: i64,
+    signal_close_time: i64,
+    available_cash: f64,
+    fee_bps: f64,
+    setup_closed: &[Candle],
+    trigger_closed: &[Candle],
+    btc_trend_closed: &[Candle],
+    evaluation: &EvaluatedSignal,
+    session_filter: &SessionFilterStatus,
+    correlation_filter: &CorrelationFilterStatus,
+    news_filter: &NewsFilterStatus,
+    scorecard_context: &ScorecardContext,
+) -> SignalAssistant {
     let scorecard = evaluate_ai_scorecard_v2(
+        strategy,
         symbol,
         signal_close_time,
         trigger_closed,
         btc_trend_closed,
         evaluation.risk_plan.as_ref(),
         fee_bps,
-        &scorecard_context,
+        scorecard_context,
     );
-    let filter_blockers = collect_filter_blockers(&session_filter, &news_filter, &scorecard);
+    let filter_blockers = collect_filter_blockers(session_filter, news_filter, &scorecard);
     let paper_ready = matches!(evaluation.stage, SignalStage::Ready) && filter_blockers.is_empty();
     let stage = if matches!(evaluation.stage, SignalStage::Ready) && !paper_ready {
         SignalStage::Setup
@@ -3211,12 +3985,19 @@ async fn build_signal_assistant(
         evaluation.stage
     };
     let risk_detail = format_risk_detail(evaluation.risk_plan.as_ref());
-    let journal_tags =
-        build_journal_tags(evaluation.bias, stage, scorecard.score, &filter_blockers);
+    let journal_tags = build_journal_tags(
+        strategy,
+        evaluation.bias,
+        stage,
+        scorecard.score,
+        &filter_blockers,
+    );
 
     let mut warnings = vec![
         format!(
-            "Paper testing je odobren samo za {ACTIVE_PAPER_STRATEGY_VERSION}; auto-paper uporablja en globalni slot in lokalne SQLite paper fille."
+            "Paper testing je odobren za {strategy} ({role} paper bot); auto-paper uporablja en globalni slot in lokalne SQLite paper fille.",
+            strategy = strategy.version,
+            role = strategy.role
         ),
         "Risk plan uporablja 1% razpolozljivega paper casha na entry.".to_string(),
         "Scorecard zahteva sveze javne Binance USD-M funding/positioning podatke; manjkajoci ali zastareli podatki blokirajo entry."
@@ -3232,6 +4013,13 @@ async fn build_signal_assistant(
     }
     warnings.extend(scorecard.warnings.iter().cloned());
     warnings.extend(news_filter.warnings.iter().cloned());
+    if !strategy.disabled_score_components.is_empty() {
+        warnings.push(format!(
+            "{} ignorira score component(s): {}.",
+            strategy.version,
+            strategy.disabled_score_components.join(", ")
+        ));
+    }
     if available_cash <= 0.0 {
         warnings.push("Na paper racunu ni prostega casha za novo pozicijo.".to_string());
     }
@@ -3248,6 +4036,12 @@ async fn build_signal_assistant(
         );
     }
 
+    let stalk_ok = matches!(
+        evaluation.stage,
+        SignalStage::Stalk | SignalStage::Setup | SignalStage::Ready
+    );
+    let setup_ok = matches!(evaluation.stage, SignalStage::Setup | SignalStage::Ready);
+    let trigger_ok = matches!(evaluation.stage, SignalStage::Ready);
     let mut checklist = vec![
         SignalCheck {
             label: "4h trend".to_string(),
@@ -3302,6 +4096,7 @@ async fn build_signal_assistant(
     });
 
     let summary = build_signal_summary(
+        strategy,
         symbol,
         evaluation.bias,
         evaluation.stage,
@@ -3312,9 +4107,9 @@ async fn build_signal_assistant(
         &filter_blockers,
     );
 
-    Ok(SignalAssistant {
+    SignalAssistant {
         symbol: symbol.to_string(),
-        strategy_version: ACTIVE_PAPER_STRATEGY_VERSION,
+        strategy_version: strategy.version,
         bias: evaluation.bias,
         stage,
         technical_stage: evaluation.stage,
@@ -3330,13 +4125,13 @@ async fn build_signal_assistant(
         },
         checklist,
         risk_plan: if paper_ready {
-            evaluation.risk_plan
+            evaluation.risk_plan.clone()
         } else {
             None
         },
         warnings,
         journal_tags,
-    })
+    }
 }
 
 async fn build_signal_replay(
@@ -4173,13 +4968,14 @@ fn evaluate_signal(
 }
 
 fn unavailable_signal_assistant(
+    strategy: PaperStrategy,
     symbol: &str,
     generated_at: i64,
     reason: String,
 ) -> SignalAssistant {
     SignalAssistant {
         symbol: symbol.to_string(),
-        strategy_version: ACTIVE_PAPER_STRATEGY_VERSION,
+        strategy_version: strategy.version,
         bias: SignalBias::Neutral,
         stage: SignalStage::Wait,
         technical_stage: SignalStage::Wait,
@@ -4605,6 +5401,7 @@ fn format_risk_detail(risk_plan: Option<&SignalRiskPlan>) -> String {
 }
 
 fn build_signal_summary(
+    strategy: PaperStrategy,
     symbol: &str,
     bias: SignalBias,
     technical_stage: SignalStage,
@@ -4618,7 +5415,8 @@ fn build_signal_summary(
         && !matches!(displayed_stage, SignalStage::Ready)
     {
         return format!(
-            "{symbol} ima tehnicno pripravljen long setup, vendar {ACTIVE_PAPER_STRATEGY_VERSION} blokira paper entry: {}. Trenutni AI score je {ai_score}.",
+            "{symbol} ima tehnicno pripravljen long setup, vendar {} blokira paper entry: {}. Trenutni AI score je {ai_score}.",
+            strategy.version,
             filter_blockers.join(", ")
         );
     }
@@ -4652,13 +5450,14 @@ fn build_signal_summary(
 }
 
 fn build_journal_tags(
+    strategy: PaperStrategy,
     bias: SignalBias,
     stage: SignalStage,
     ai_score: i32,
     filter_blockers: &[String],
 ) -> Vec<String> {
     let mut tags = vec![
-        ACTIVE_PAPER_STRATEGY_VERSION.to_string(),
+        strategy.version.to_string(),
         format!("stage_{}", stage.as_label().to_ascii_lowercase()),
         format!("bias_{}", bias.as_label()),
         format!("ai_score_{ai_score}"),
@@ -4703,6 +5502,10 @@ fn parse_f64(raw: &str) -> Result<f64, ApiError> {
         .map_err(|error| ApiError::upstream(format!("Failed to parse exchange number: {error}")))
 }
 
+fn parse_optional_f64(raw: Option<&str>) -> Result<Option<f64>, ApiError> {
+    raw.map(parse_f64).transpose()
+}
+
 fn parse_json_f64(value: &serde_json::Value) -> Result<f64, ApiError> {
     match value {
         serde_json::Value::String(raw) => parse_f64(raw),
@@ -4713,6 +5516,11 @@ fn parse_json_f64(value: &serde_json::Value) -> Result<f64, ApiError> {
             "Exchange returned an invalid numeric field.",
         )),
     }
+}
+
+fn to_json_string<T: Serialize>(value: &T) -> Result<String, ApiError> {
+    serde_json::to_string(value)
+        .map_err(|error| ApiError::internal(format!("Failed to encode telemetry JSON: {error}")))
 }
 
 fn parse_json_i64(value: &serde_json::Value) -> Result<i64, ApiError> {

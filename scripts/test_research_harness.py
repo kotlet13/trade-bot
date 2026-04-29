@@ -618,6 +618,16 @@ class ResearchHarnessFixtures(unittest.TestCase):
         self.assertIn("v2_reclaim_active_base_taker_global_lte120", names)
         self.assertIn("v2_reclaim_overlap_base_funding_taker_buy", names)
 
+    def test_event_rule_filter_candidates_are_available(self) -> None:
+        focused = [candidate for candidate in harness.build_candidates() if candidate.family == "event_rule_filters"]
+        names = {candidate.name for candidate in focused}
+        self.assertEqual(len(focused), 14)
+        self.assertIn("event_rule_v2_base_global_lte120", names)
+        self.assertIn("event_rule_v2_base_funding_taker", names)
+        self.assertIn("event_rule_v2_base_global_funding_taker", names)
+        self.assertIn("event_rule_v2_moderate_global_lte120", names)
+        self.assertIn("event_rule_v2_no_corr_global_funding_taker", names)
+
     def test_london_or_overlap_regime_filter_excludes_new_york(self) -> None:
         candidate = harness.CandidateSpec(
             "london_overlap_fixture",
@@ -778,6 +788,17 @@ class ResearchHarnessFixtures(unittest.TestCase):
         self.assertIn("ai_score_v2_ablation_control_score7", names)
         self.assertIn("ai_score_v2_ablate_session", names)
         self.assertIn("ai_score_v2_ablate_top_position", names)
+
+    def test_ai_scorecard_global_sweep_candidates_are_available(self) -> None:
+        focused = [
+            candidate for candidate in harness.build_candidates() if candidate.family == "ai_scorecard_v2_global_sweep"
+        ]
+        names = {candidate.name for candidate in focused}
+        self.assertEqual(len(focused), 14)
+        self.assertIn("ai_score_global_base_s6_g120", names)
+        self.assertIn("ai_score_global_base_s7_g150_toppos160", names)
+        self.assertIn("ai_score_global_oi_s6_g120", names)
+        self.assertIn("ai_score_global_oi_s7_g150_toppos160", names)
 
     def test_ai_scorecard_ablation_removes_only_selected_component(self) -> None:
         signal_time, funding_rows, metric_rows = self.make_scorecard_context()

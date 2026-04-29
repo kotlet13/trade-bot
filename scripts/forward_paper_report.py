@@ -16,6 +16,7 @@ DEFAULT_DB_PATH = Path("data/tradebot.db")
 
 @dataclass(frozen=True)
 class TradePair:
+    strategy_version: str
     symbol: str
     opened_at: int | None
     closed_at: int | None
@@ -161,6 +162,7 @@ def pair_auto_trades(
         )
         pairs.append(
             TradePair(
+                strategy_version=str(decision.get("strategy_version") or "unknown"),
                 symbol=symbol,
                 opened_at=opened_at,
                 closed_at=int(exit_trade["executed_at"]) if exit_trade else None,
@@ -197,6 +199,7 @@ def summarize(
     completed = [pair for pair in pairs if pair.closed_at is not None]
     open_pairs = [pair for pair in pairs if pair.closed_at is None]
     decision_counts = Counter(str(item.get("decision") or "unknown") for item in decisions)
+    strategy_counts = Counter(str(item.get("strategy_version") or "unknown") for item in decisions)
     symbol_counts = Counter(str(item.get("symbol") or "unknown") for item in decisions)
     rejected = [item for item in decisions if item.get("decision") == "rejected"]
     blocker_counts = Counter(blocker_from_reason(item.get("reason")) for item in rejected)
@@ -214,6 +217,7 @@ def summarize(
         "generated_at": int(datetime.now(tz=UTC).timestamp() * 1000),
         "decisions_total": len(decisions),
         "decision_counts": dict(decision_counts),
+        "strategy_counts": dict(strategy_counts),
         "symbol_counts": dict(symbol_counts),
         "rejection_blockers": dict(blocker_counts),
         "auto_entries": len(pairs),
@@ -252,6 +256,13 @@ def render_markdown(summary: dict[str, Any], decisions: list[dict[str, Any]]) ->
     else:
         lines.append("- No auto-paper decisions logged yet.")
 
+    lines.extend(["", "## Strategies", ""])
+    if summary["strategy_counts"]:
+        for name, count in sorted(summary["strategy_counts"].items()):
+            lines.append(f"- `{name}`: `{count}`")
+    else:
+        lines.append("- No strategy decisions logged yet.")
+
     lines.extend(["", "## Rejection Blockers", ""])
     if summary["rejection_blockers"]:
         for name, count in sorted(summary["rejection_blockers"].items(), key=lambda item: (-item[1], item[0])):
@@ -271,8 +282,9 @@ def render_markdown(summary: dict[str, Any], decisions: list[dict[str, Any]]) ->
     if pairs:
         for pair in pairs[-20:]:
             lines.append(
-                "- `{symbol}` opened `{opened}` outcome `{outcome}` "
+                "- `{strategy}` `{symbol}` opened `{opened}` outcome `{outcome}` "
                 "entry `{entry}` exit `{exit}` PnL `{pnl}` R `{r}`".format(
+                    strategy=pair["strategy_version"],
                     symbol=pair["symbol"],
                     opened=utc_text(pair["opened_at"]),
                     outcome=pair["outcome"],
@@ -289,7 +301,7 @@ def render_markdown(summary: dict[str, Any], decisions: list[dict[str, Any]]) ->
     if decisions:
         for item in decisions[-20:]:
             lines.append(
-                f"- `{utc_text(item.get('created_at'))}` `{item.get('symbol')}` "
+                f"- `{utc_text(item.get('created_at'))}` `{item.get('strategy_version')}` `{item.get('symbol')}` "
                 f"`{item.get('decision')}` score `{item.get('ai_score')}`: {item.get('reason') or ''}"
             )
     else:

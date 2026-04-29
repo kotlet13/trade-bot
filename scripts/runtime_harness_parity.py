@@ -21,7 +21,7 @@ import research_harness as harness
 import strategy_study as study
 
 
-ACTIVE_STRATEGY = "ai_score_v2_base_score7"
+DEFAULT_STRATEGY = "ai_score_v2_base_score7"
 DEFAULT_BASE_URL = "http://localhost:8081"
 DEFAULT_SYMBOLS = "ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT"
 FAPI_BASE_URL = "https://fapi.binance.com"
@@ -59,11 +59,21 @@ def runtime_dashboard(base_url: str, symbol: str) -> dict[str, Any]:
     return json_get_url(f"{base_url.rstrip('/')}/api/dashboard?{query}", timeout=60)
 
 
-def active_candidate() -> harness.CandidateSpec:
+def candidate_by_name(strategy: str) -> harness.CandidateSpec:
     for candidate in harness.build_candidates():
-        if candidate.name == ACTIVE_STRATEGY:
+        if candidate.name == strategy:
             return candidate
-    raise RuntimeError(f"Active strategy candidate not found: {ACTIVE_STRATEGY}")
+    raise RuntimeError(f"Strategy candidate not found: {strategy}")
+
+
+def runtime_signal_for_strategy(dashboard: dict[str, Any], strategy: str) -> dict[str, Any]:
+    primary = dashboard["signal_assistant"]
+    if primary.get("strategy_version") == strategy:
+        return primary
+    for signal in dashboard.get("secondary_signal_assistants") or []:
+        if signal.get("strategy_version") == strategy:
+            return signal
+    raise RuntimeError(f"Runtime strategy not found in dashboard payload: {strategy}")
 
 
 def closed(candles: list[study.Candle], cutoff_time: int, interval: str) -> list[study.Candle]:
@@ -179,7 +189,7 @@ def python_signal(
     dashboard: dict[str, Any],
     candidate: harness.CandidateSpec,
 ) -> dict[str, Any]:
-    signal = dashboard["signal_assistant"]
+    signal = runtime_signal_for_strategy(dashboard, candidate.name)
     paper = dashboard["paper"]
     generated_at = int(signal["generated_at"])
     signal_close_time = int(signal.get("signal_close_time") or generated_at)
@@ -246,7 +256,7 @@ def python_signal(
 
 def compare_symbol(base_url: str, symbol: str, candidate: harness.CandidateSpec) -> ParityRow:
     dashboard = runtime_dashboard(base_url, symbol)
-    runtime = dashboard["signal_assistant"]
+    runtime = runtime_signal_for_strategy(dashboard, candidate.name)
     py = python_signal(symbol, dashboard, candidate)
     notes: list[str] = []
 
@@ -290,13 +300,13 @@ def utc_text(timestamp_ms: int) -> str:
     return datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC).strftime("%Y-%m-%d %H:%M UTC")
 
 
-def render_markdown(rows: list[ParityRow]) -> str:
+def render_markdown(rows: list[ParityRow], strategy: str = DEFAULT_STRATEGY) -> str:
     passed = sum(1 for row in rows if row.status == "pass")
     lines = [
         "# Runtime/Harness Parity Report",
         "",
         f"- Generated: `{utc_text(int(time.time() * 1000))}`",
-        f"- Strategy: `{ACTIVE_STRATEGY}`",
+        f"- Strategy: `{strategy}`",
         f"- Symbols checked: `{len(rows)}`",
         f"- Passing: `{passed}`",
         f"- Warnings: `{len(rows) - passed}`",
@@ -320,6 +330,7 @@ def parse_symbols(raw: str) -> list[str]:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Compare runtime SignalAssistant decisions with Python harness logic.")
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
+    parser.add_argument("--strategy", default=DEFAULT_STRATEGY)
     parser.add_argument("--symbols", default=DEFAULT_SYMBOLS)
     parser.add_argument("--json-out", type=Path)
     parser.add_argument("--markdown-out", type=Path)
@@ -329,16 +340,16 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    candidate = active_candidate()
+    candidate = candidate_by_name(args.strategy)
     rows = [compare_symbol(args.base_url, symbol, candidate) for symbol in parse_symbols(args.symbols)]
     payload = {
         "generated_at": int(time.time() * 1000),
-        "strategy": ACTIVE_STRATEGY,
+        "strategy": args.strategy,
         "rows": [row.__dict__ for row in rows],
         "pass_count": sum(1 for row in rows if row.status == "pass"),
         "warn_count": sum(1 for row in rows if row.status != "pass"),
     }
-    markdown = render_markdown(rows)
+    markdown = render_markdown(rows, args.strategy)
 
     if args.json_out:
         args.json_out.parent.mkdir(parents=True, exist_ok=True)

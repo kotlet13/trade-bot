@@ -301,6 +301,60 @@ h2 {
   box-shadow: 0 0 0 6px rgba(255, 107, 107, 0.08);
 }
 
+.secondary-bots {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.secondary-bot {
+  padding: 16px;
+  border: 1px solid rgba(166, 184, 214, 0.12);
+  border-radius: 8px;
+  background: rgba(3, 8, 16, 0.42);
+}
+
+.secondary-bot-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.secondary-bot-head strong {
+  display: block;
+  margin-top: 4px;
+}
+
+.signal-pill {
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  border: 1px solid rgba(166, 184, 214, 0.14);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.signal-pill.is-positive {
+  border-color: rgba(71, 213, 138, 0.35);
+  color: var(--green);
+}
+
+.secondary-bot-summary {
+  margin: 12px 0;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.secondary-bot-grid,
+.secondary-bot-warnings {
+  display: grid;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
 #priceChart {
   width: 100%;
   background:
