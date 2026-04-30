@@ -3505,7 +3505,6 @@
 - Top gate failures: `not_full_12000_candle_walk_forward, executed_trades<80, net_avg_r<0.1, profit_factor<1.25, holdout_net_total_r<=0, holdout_net_avg_r<0.05, folds_positive<4`
 - Promoted strategies: `none`
 
-
 ### Research campaign 2026-04-26 00:40 Srednjeevropski poletni čas  
 
 - Status: `done`
@@ -4820,3 +4819,30 @@ Interpretation:
 - Feature surface: BTC cycle/halving phase, session/day/month, BTC regime, 1h/4h returns, futures bias, OI change, market-wide and symbol-specific news proximity, signal context, paper-decision context, and forward returns
 - Boundary: diagnostic dataset only; no candidate promotion and no paper strategy change
 - SQLite compatibility note: runtime DB journal mode now uses `DELETE` instead of WAL so the Rust app and Python sidecar can share the Docker Desktop/Windows bind-mounted database.
+
+### Market-memory harness candidate implementation 2026-04-30
+
+- Status: `implemented`
+- Scope: `market_memory_filters`
+- Candidate count: `14`
+- Runtime impact: none; active paper setup remains `ai_score_v2_base_score7` primary and `ai_score_v2_ablate_oi` secondary
+- Research intent: convert the diagnostic market-memory surface into bounded harness candidates before considering any runtime or paper-bot change
+- Filters tested: BTC 24h neutral return band, active/London/New York sessions, basket breadth `30%` to `70%`, global-account long/short cap `1.20`, funding-not-panic, taker pressure >= `1.10`, score thresholds `5`/`6`/`7`, and OI-ablation variants
+- Boundary: harness-only; no candidate can be paper traded unless it later passes the full promotion gates and the user explicitly approves promotion
+- Smoke command: `python scripts\research_harness.py --smoke --candidate-family market_memory_filters --workers 2 --json-out tmp\research_runs\smoke_market_memory_filters.json`
+- Full command: `python scripts\research_harness.py --candidate-family market_memory_filters --trigger-limit 12000 --universe-limit 30 --workers 2 --json-out tmp\research_runs\market_memory_filters_universe30_20260430.json`
+
+### Research campaign 2026-04-30T11:39:41Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\smoke_market_memory_filters.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT`
+- Candidates tested: `6`
+- Universe filter: `profile=strict`, `min_quote_volume=5000000.0`
+- Top candidate: `memory_v2_base_neutral_s5`
+- Top OOS: `trades=0`, `net_total_r=0`, `net_avg_r=0.0`, `pf=0.0`
+- Top gate status: `fail`
+- Top gate failures: `not_full_12000_candle_walk_forward, executed_trades<80, net_avg_r<0.1, profit_factor<1.25, holdout_net_total_r<=0, holdout_net_avg_r<0.05, folds_positive<4`
+- Top gate failure counts: `not_full_12000_candle_walk_forward=6, executed_trades<80=6, net_avg_r<0.1=6, profit_factor<1.25=6, holdout_net_total_r<=0=6`
+- Promoted strategies: `none`

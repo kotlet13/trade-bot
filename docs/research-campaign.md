@@ -222,3 +222,10 @@ The intended sequence after durable telemetry collection is:
 1. Use market-memory diagnostics to identify robust regimes and symbol-specific behavior.
 2. Convert the strongest diagnostics into harness-only higher-coverage candidates: broader reclaim variants, macro-policy filters, news-shock-then-reclaim entries, cycle-aware symbol variants, and lower score thresholds only with stricter regime filters.
 3. Keep every new candidate out of paper trading until it passes the documented promotion gates and the user explicitly approves promotion.
+
+That first conversion is implemented as the `market_memory_filters` harness family. It keeps the active paper setup unchanged and tests bounded variants around BTC 24h neutral regimes, London/New York session memory, basket breadth between `30%` and `70%`, derivatives global-account bias, funding-not-panic plus taker pressure, and scorecard/OI-ablation branches with score thresholds from `5` to `7`.
+
+```powershell
+python scripts\research_harness.py --smoke --candidate-family market_memory_filters --workers 2 --json-out tmp\research_runs\smoke_market_memory_filters.json
+python scripts\research_harness.py --candidate-family market_memory_filters --trigger-limit 12000 --universe-limit 30 --workers 2 --json-out tmp\research_runs\market_memory_filters_universe30_latest.json
+```

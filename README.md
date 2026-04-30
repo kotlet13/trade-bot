@@ -143,6 +143,15 @@ Future research sequence:
 3. test higher-coverage candidates in the harness
 4. promote nothing unless all gates pass and the user explicitly approves paper trading
 
+Market-memory harness research:
+
+```bash
+python scripts/research_harness.py --smoke --candidate-family market_memory_filters --workers 2 --json-out tmp/research_runs/smoke_market_memory_filters.json
+python scripts/research_harness.py --candidate-family market_memory_filters --trigger-limit 12000 --universe-limit 30 --workers 2 --json-out tmp/research_runs/market_memory_filters_universe30_latest.json
+```
+
+The `market_memory_filters` family is harness-only. It converts the diagnostic market-memory layer into bounded candidates around BTC 24h regime, London/New York sessions, basket breadth, derivatives positioning, funding/taker pressure, and scorecard/OI-ablation variants. It does not change active paper strategies.
+
 Runtime/harness parity check:
 
 ```bash

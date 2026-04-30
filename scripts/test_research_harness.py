@@ -800,6 +800,17 @@ class ResearchHarnessFixtures(unittest.TestCase):
         self.assertIn("ai_score_global_oi_s6_g120", names)
         self.assertIn("ai_score_global_oi_s7_g150_toppos160", names)
 
+    def test_market_memory_filter_candidates_are_available(self) -> None:
+        focused = [candidate for candidate in harness.build_candidates() if candidate.family == "market_memory_filters"]
+        names = {candidate.name for candidate in focused}
+        self.assertEqual(len(focused), 14)
+        self.assertIn("memory_v2_base_neutral_s5", names)
+        self.assertIn("memory_v2_oi_neutral_s7", names)
+        self.assertIn("memory_v2_base_london_neutral_s5", names)
+        self.assertIn("memory_v2_oi_new_york_neutral_s5", names)
+        self.assertIn("memory_v2_base_breadth30_70_s5", names)
+        self.assertIn("memory_v2_oi_funding_taker110_s5", names)
+
     def test_ai_scorecard_ablation_removes_only_selected_component(self) -> None:
         signal_time, funding_rows, metric_rows = self.make_scorecard_context()
         base_candidate = harness.CandidateSpec(
