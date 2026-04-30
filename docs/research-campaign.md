@@ -231,3 +231,12 @@ python scripts\research_harness.py --candidate-family market_memory_filters --tr
 ```
 
 Full result: `tmp/research_runs/market_memory_filters_universe30_20260430.json` completed with `14` candidates and `0` promotion passes. The best aggregate candidate was `memory_v2_oi_neutral_s6` with `28` OOS trades, `4.2185R` net, `0.1507R` average, `pf=1.3335`, `max_drawdown=5.7941R`, and holdout `9.5427R`, but all validation folds were net negative or empty (`0/5` positive folds). The funding/taker variant, `memory_v2_oi_funding_taker110_s5`, was similarly holdout-heavy with `24` trades, `3.8424R` net, `0.1601R` average, `pf=1.4058`, and `0/5` positive folds. Conclusion: the memory filters describe the current forward failures well, but this first harness conversion is not robust enough to promote. No runtime or paper-bot change is warranted.
+
+The next option-search batch is `relative_strength_continuation`. It is deliberately not another pure reclaim tweak: it tests HTF continuation, Donchian breakout, breakout-pullback, EMA pullback, opening-session breakout, and moderate reclaim only when the symbol is in the upper relative-strength bucket, BTC and basket breadth are constructive, and fresh funding/positioning data is available. Some variants add taker, global-account, top-position, and scorecard gates.
+
+```powershell
+python scripts\research_harness.py --smoke --candidate-family relative_strength_continuation --workers 2 --json-out tmp\research_runs\smoke_relative_strength_continuation.json
+python scripts\research_harness.py --candidate-family relative_strength_continuation --trigger-limit 12000 --universe-limit 30 --workers 2 --json-out tmp\research_runs\relative_strength_continuation_universe30_latest.json
+```
+
+This family is harness-only. It should not affect `ai_score_v2_base_score7`, `ai_score_v2_ablate_oi`, or auto-paper unless a candidate later passes promotion gates and receives explicit user approval.

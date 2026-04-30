@@ -4867,3 +4867,31 @@ Interpretation:
 - The best aggregate candidate, `memory_v2_oi_neutral_s6`, had acceptable aggregate quality (`28` trades, `4.2185R`, `0.1507R`, `pf=1.3335`, `max_drawdown=5.7941R`) but only because holdout was strong (`9.5427R`). Validation was weak (`-5.3242R`, `pf=0.3239`) and `0/5` folds were positive.
 - `memory_v2_oi_funding_taker110_s5` showed the same shape: `24` trades, `3.8424R`, `0.1601R`, `pf=1.4058`, but validation was negative and folds were not stable.
 - These filters explain the two current forward-paper losses better than they produce a stable promotion candidate. Treat them as diagnostics for stricter forward monitoring, not as a paper strategy replacement.
+
+### Relative-strength continuation implementation 2026-04-30
+
+- Status: `implemented`
+- Scope: `relative_strength_continuation`
+- Candidate count: `12`
+- Runtime impact: none; active paper setup remains `ai_score_v2_base_score7` primary and `ai_score_v2_ablate_oi` secondary
+- Research intent: look for a third-bot path that is not just another strict reclaim scorecard variant
+- Entry families tested: HTF continuation, Donchian breakout, breakout-pullback, EMA pullback, opening-session breakout, and moderate reclaim
+- Filters tested: relative-strength percentile >= `0.70`, basket positive share `45%` to `85%`, BTC 24h return between `-1.5%` and `+3.5%`, fresh funding/metrics, scorecard threshold `5`/`6`, and optional taker/global/top-position quality gates
+- Boundary: harness-only; no paper strategy change unless a candidate later passes promotion gates and the user explicitly approves promotion
+- Smoke command: `python scripts\research_harness.py --smoke --candidate-family relative_strength_continuation --workers 2 --json-out tmp\research_runs\smoke_relative_strength_continuation.json`
+- Full command: `python scripts\research_harness.py --candidate-family relative_strength_continuation --trigger-limit 12000 --universe-limit 30 --workers 2 --json-out tmp\research_runs\relative_strength_continuation_universe30_20260430.json`
+
+### Research campaign 2026-04-30T20:18:55Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\smoke_relative_strength_continuation.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT`
+- Candidates tested: `6`
+- Universe filter: `profile=strict`, `min_quote_volume=5000000.0`
+- Top candidate: `rs_htf_active_s5`
+- Top OOS: `trades=1`, `net_total_r=-0.7488`, `net_avg_r=-0.7488`, `pf=0.0`
+- Top gate status: `fail`
+- Top gate failures: `not_full_12000_candle_walk_forward, executed_trades<80, net_avg_r<0.1, profit_factor<1.25, holdout_net_total_r<=0, holdout_net_avg_r<0.05, folds_positive<4, symbol_concentration>0.4, single_trade_concentration>0.25`
+- Top gate failure counts: `not_full_12000_candle_walk_forward=6, executed_trades<80=6, net_avg_r<0.1=6, profit_factor<1.25=6, holdout_net_total_r<=0=6`
+- Promoted strategies: `none`
