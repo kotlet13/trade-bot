@@ -3949,7 +3949,6 @@
 - Top gate failure counts: `not_full_12000_candle_walk_forward=6, executed_trades<80=6, net_avg_r<0.1=6, profit_factor<1.25=6, holdout_net_total_r<=0=6`
 - Promoted strategies: `none`
 
-
 ### Research campaign 2026-04-26T20:18:14Z
 
 - Status: `done`
@@ -4846,3 +4845,25 @@ Interpretation:
 - Top gate failures: `not_full_12000_candle_walk_forward, executed_trades<80, net_avg_r<0.1, profit_factor<1.25, holdout_net_total_r<=0, holdout_net_avg_r<0.05, folds_positive<4`
 - Top gate failure counts: `not_full_12000_candle_walk_forward=6, executed_trades<80=6, net_avg_r<0.1=6, profit_factor<1.25=6, holdout_net_total_r<=0=6`
 - Promoted strategies: `none`
+
+### Research campaign 2026-04-30T13:18:11Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `C:\Users\novsakanze\github\trade-bot\tmp\research_runs\market_memory_filters_universe30_20260430.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, BNBUSDT, TONUSDT, ADAUSDT, ZECUSDT, TRXUSDT, SUIUSDT, AVAXUSDT, LINKUSDT, LTCUSDT, AAVEUSDT, APTUSDT, FILUSDT, NEARUSDT, XLMUSDT, SANDUSDT, UNIUSDT, DOTUSDT, POLUSDT, ARBUSDT, HBARUSDT`
+- Candidates tested: `14`
+- Universe filter: `profile=strict`, `min_quote_volume=5000000.0`
+- Top candidate: `memory_v2_oi_neutral_s6`
+- Top OOS: `trades=28`, `net_total_r=4.2185`, `net_avg_r=0.1507`, `pf=1.3335`
+- Top gate status: `fail`
+- Top gate failures: `executed_trades<80, folds_positive<4`
+- Top gate failure counts: `executed_trades<80=14, folds_positive<4=14, profit_factor<1.25=11, net_avg_r<0.1=10, symbol_concentration>0.4=5`
+- Promoted strategies: `none`
+
+Interpretation:
+
+- No `market_memory_filters` candidate passed the promotion gates, so there is no runtime or paper-bot change.
+- The best aggregate candidate, `memory_v2_oi_neutral_s6`, had acceptable aggregate quality (`28` trades, `4.2185R`, `0.1507R`, `pf=1.3335`, `max_drawdown=5.7941R`) but only because holdout was strong (`9.5427R`). Validation was weak (`-5.3242R`, `pf=0.3239`) and `0/5` folds were positive.
+- `memory_v2_oi_funding_taker110_s5` showed the same shape: `24` trades, `3.8424R`, `0.1601R`, `pf=1.4058`, but validation was negative and folds were not stable.
+- These filters explain the two current forward-paper losses better than they produce a stable promotion candidate. Treat them as diagnostics for stricter forward monitoring, not as a paper strategy replacement.
