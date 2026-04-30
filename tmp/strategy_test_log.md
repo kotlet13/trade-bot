@@ -3875,7 +3875,6 @@
 - Top gate failure counts: `not_full_12000_candle_walk_forward=6, executed_trades<80=6, net_avg_r<0.1=6, profit_factor<1.25=6, holdout_net_total_r<=0=6`
 - Promoted strategies: `none`
 
-
 ### Research campaign 2026-04-26T09:54:19Z
 
 - Status: `done`
@@ -4895,3 +4894,26 @@ Interpretation:
 - Top gate failures: `not_full_12000_candle_walk_forward, executed_trades<80, net_avg_r<0.1, profit_factor<1.25, holdout_net_total_r<=0, holdout_net_avg_r<0.05, folds_positive<4, symbol_concentration>0.4, single_trade_concentration>0.25`
 - Top gate failure counts: `not_full_12000_candle_walk_forward=6, executed_trades<80=6, net_avg_r<0.1=6, profit_factor<1.25=6, holdout_net_total_r<=0=6`
 - Promoted strategies: `none`
+
+### Research campaign 2026-04-30T20:38:11Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `C:\Users\novsakanze\github\trade-bot\tmp\research_runs\relative_strength_continuation_universe30_20260430.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT, XRPUSDT, BNBUSDT, ZECUSDT, TRXUSDT, ADAUSDT, APTUSDT, LINKUSDT, SUIUSDT, LTCUSDT, AVAXUSDT, TONUSDT, AAVEUSDT, SANDUSDT, XLMUSDT, NEARUSDT`
+- Candidates tested: `12`
+- Universe filter: `profile=strict`, `min_quote_volume=5000000.0`
+- Top candidate: `rs_htf_quality_s6`
+- Top OOS: `trades=74`, `net_total_r=10.7718`, `net_avg_r=0.1456`, `pf=1.6633`
+- Top gate status: `fail`
+- Top gate failures: `executed_trades<80, folds_positive<4`
+- Top gate failure counts: `folds_positive<4=12, net_avg_r<0.1=9, max_drawdown_r>10.0=8, profit_factor<1.25=7, holdout_net_avg_r<0.05=5`
+- Promoted strategies: `none`
+
+Interpretation:
+
+- No `relative_strength_continuation` candidate passed the promotion gates, so there is no runtime or paper-bot change.
+- The strongest branch is HTF continuation plus quality filters. `rs_htf_quality_s6` reached `74` trades, `10.7718R`, `0.1456R`, `pf=1.6633`, `max_drawdown=6.5898R`, and holdout `12.2393R`, failing only trade count and fold stability.
+- `rs_htf_quality_s5` was almost identical with `76` trades, `10.641R`, `0.14R`, `pf=1.6482`, and the same two gate failures.
+- Broader HTF variants cleared trade count (`151` to `169` trades) but quality dropped below promotion thresholds and drawdown rose above `10R`.
+- This is the best new option path so far. The next bounded follow-up should refine HTF relative-strength continuation to recover a few trades while improving fold stability, not promote it directly.
