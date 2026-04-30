@@ -1360,6 +1360,32 @@ fn initialize_database(
 
         CREATE INDEX IF NOT EXISTS idx_telemetry_signal_evaluations_generated_at
             ON telemetry_signal_evaluations(generated_at);
+
+        CREATE TABLE IF NOT EXISTS telemetry_news_events (
+            event_key TEXT PRIMARY KEY,
+            source TEXT NOT NULL,
+            source_url TEXT NOT NULL,
+            title TEXT NOT NULL,
+            url TEXT,
+            published_at INTEGER,
+            fetched_at INTEGER NOT NULL,
+            event_type TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            sentiment TEXT NOT NULL,
+            severity INTEGER NOT NULL,
+            confidence REAL NOT NULL,
+            symbols_json TEXT NOT NULL,
+            bases_json TEXT NOT NULL,
+            tags_json TEXT NOT NULL,
+            summary TEXT,
+            classification_json TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_telemetry_news_events_published_at
+            ON telemetry_news_events(published_at);
+
+        CREATE INDEX IF NOT EXISTS idx_telemetry_news_events_event_type
+            ON telemetry_news_events(event_type);
         ",
     )?;
     ensure_column(connection, "auto_paper_decisions", "entry_price", "REAL")?;

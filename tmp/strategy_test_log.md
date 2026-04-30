@@ -4771,3 +4771,39 @@ Interpretation:
 - The best candidate, `ai_score_global_oi_s7_g150_toppos160`, had excellent quality but only `26` OOS trades: `20.1227R` net, `0.7739R` average, `pf=6.5461`, `max_drawdown=1.3108R`, holdout `8.5304R`, and `3/5` positive folds.
 - The broader best score-6 branch, `ai_score_global_oi_s6_g150`, reached only `39` trades with `14.445R` net, `0.3704R` average, `pf=2.0779`, `max_drawdown=5.0478R`, holdout `7.5347R`, and `3/5` positive folds.
 - Global-account and top-position caps are useful quality filters, but in this sweep they removed too much coverage and left fold gaps. Treat them as research diagnostics, not a promotion candidate.
+
+### Runtime telemetry report implementation 2026-04-29
+
+- Status: `implemented`
+- Scope: `runtime-forward-diagnostics`
+- Script: `scripts\runtime_telemetry_report.py`
+- Test: `scripts\test_runtime_telemetry_report.py`
+- Outputs: `tmp\runtime_telemetry_report_latest.md`, `tmp\runtime_telemetry_report_latest.json`
+- Purpose: summarize runtime telemetry coverage, market breadth, futures data freshness, `SignalAssistant` stages, failed gates, blocked READY setups, auto-paper decisions, and paper trade outcomes.
+
+### Public news/event diagnostics implementation 2026-04-29
+
+- Status: `implemented`
+- Scope: `news-aware-research-infrastructure`
+- Runtime impact: none; active paper setup remains `ai_score_v2_base_score7` primary and `ai_score_v2_ablate_oi` secondary
+- SQLite table added: `telemetry_news_events`
+- Scripts: `scripts\news_event_collector.py`, `scripts\news_event_impact_dataset.py`
+- Tests: `scripts\test_news_event_collector.py`, `scripts\test_news_event_impact_dataset.py`
+- Latest collection output: `tmp\news_event_collection_latest.md`, `tmp\news_event_collection_latest.json`
+- Latest impact output: `tmp\news_event_impact_latest.md`, `tmp\news_event_impact_latest.json`
+- First collection: `145` public RSS events, with `regulatory=63`, `general_news=53`, `macro_policy=11`, `fund_flow=8`, `security_incident=6`, `protocol_upgrade=2`, `market_structure=1`, and `token_unlock=1`
+- First impact pass: `211` event-symbol rows. The only positive 60-minute bucket in the small sample was `macro_policy` (`16` samples, `+0.198%` average, `68.75%` positive). Generic, regulatory, security, and fund-flow buckets were weak/noisy. This is hypothesis generation only and does not justify paper promotion.
+
+### Reboot-safe research data service 2026-04-30
+
+- Status: `implemented`
+- Scope: `reboot-safe-research-foundation`
+- Runtime impact: none; active paper setup remains `ai_score_v2_base_score7` primary and `ai_score_v2_ablate_oi` secondary
+- Compose service: `news-events`
+- Service script: `scripts\news_event_service.py`
+- Default cadence: `NEWS_EVENT_INTERVAL_SECONDS=900`
+- Default RSS limit: `NEWS_EVENT_COLLECTOR_LIMIT_PER_SOURCE=50`
+- Default impact lookback: `NEWS_EVENT_IMPACT_SINCE_HOURS=168`
+- Cycle commands: public RSS collector, news-event impact dataset, runtime telemetry report
+- Boundary: research-only; no `/api/paper/*` calls, no forced trades, no candidate promotion
+- Next planned research layer: market-memory dataset, then harness-only higher-coverage candidates, then promotion only if gates pass and user explicitly approves.

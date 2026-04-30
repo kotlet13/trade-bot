@@ -1,6 +1,8 @@
 target/
 data/paper_state.json
 data/*.db
+data/*.db-wal
+data/*.db-shm
 scripts/__pycache__/
 __pycache__/
 *.pyc
@@ -11,4 +13,7 @@ tmp/pylibs/
 tmp/pdfs/
 tmp/strategy_study_*.json
 tmp/forward_paper_report_latest.*
+tmp/runtime_telemetry_report_latest.*
+tmp/news_event_collection_latest.*
+tmp/news_event_impact_latest.*
 tmp/runtime_harness_parity*_latest.*

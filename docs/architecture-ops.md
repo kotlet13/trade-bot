@@ -2,12 +2,13 @@
 
 ## Komponente sistema
 
-Trenutna aplikacija ima stiri osnovne dele:
+Trenutna aplikacija ima pet osnovnih delov:
 
 - Rust backend v `src/main.rs`
 - static frontend v `static/`
 - SQLite baza v `data/tradebot.db`
 - Docker runtime preko `Dockerfile` in `docker-compose.yml`
+- `news-events` Python sidecar za research-only public RSS event zbiranje
 
 ## Runtime flow
 
@@ -20,6 +21,7 @@ Zagon poteka takole:
 5. UI ob osvezevanju klice backend, backend pa uporablja javne Binance endpointe za tickerje, cene in candles
 6. paper orderji in pozicije se obdelujejo lokalno v SQLite bazi
 7. runtime telemetry worker nizkofrekvencno arhivira javne market podatke za prihodnjo analizo
+8. `news-events` sidecar vsakih `900` sekund osvezi public RSS event archive in lokalne diagnosticne reporte
 
 ## Trenutni HTTP API
 
@@ -126,6 +128,29 @@ Runtime telemetry archive je locen od paper ledgerja in ne oddaja orderjev. Priv
 - `telemetry_funding_rates`: USD-M funding rows
 - `telemetry_futures_metric_rows`: USD-M 5m open interest, global account long/short, top-position long/short, taker long/short rows
 - `telemetry_signal_evaluations`: `SignalAssistant` snapshots, kadar jih runtime ze izracuna za dashboard ali auto-paper cycle
+- `telemetry_news_events`: research-only public RSS event classifications for news-impact diagnostics
+
+Telemetry porocilo:
+
+```powershell
+python scripts\runtime_telemetry_report.py --markdown-out tmp\runtime_telemetry_report_latest.md --json-out tmp\runtime_telemetry_report_latest.json
+```
+
+News/event zbiranje in impact diagnostika:
+
+```powershell
+python scripts\news_event_collector.py --markdown-out tmp\news_event_collection_latest.md --json-out tmp\news_event_collection_latest.json
+python scripts\news_event_impact_dataset.py --markdown-out tmp\news_event_impact_latest.md --json-out tmp\news_event_impact_latest.json
+```
+
+Collector uporablja javne RSS vire in deterministicen classifier. Impact script poveze dogodke z arhiviranimi `15m` sveckami in izracuna forward return po tipu dogodka, sentimentu in simbolu. To je research-only infrastruktura in ne spreminja runtime paper gate-ov.
+
+`news-events` sidecar:
+
+- uporablja `restart: unless-stopped`, enako kot glavna aplikacija
+- deli `./data` in `./tmp` volume z lokalnim repozitorijem
+- izvaja `scripts/news_event_service.py`
+- ne klice `/api/paper/*` endpointov in ne oddaja orderjev
 
 Operativna posledica:
 
@@ -150,6 +175,9 @@ Privzeta konfiguracija:
 - `RUNTIME_TELEMETRY_CANDLE_LIMIT=240`
 - `RUNTIME_TELEMETRY_FUTURES_ENABLED=true`
 - `RUNTIME_TELEMETRY_SIGNAL_EVALUATIONS=true`
+- `NEWS_EVENT_INTERVAL_SECONDS=900`
+- `NEWS_EVENT_COLLECTOR_LIMIT_PER_SOURCE=50`
+- `NEWS_EVENT_IMPACT_SINCE_HOURS=168`
 
 Lokalni dostop:
 

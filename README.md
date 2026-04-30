@@ -29,6 +29,8 @@ docker compose up -d --build
 
 Container ima nastavljen `restart: unless-stopped`, zato se po ponovnem zagonu Docker engine-a znova zazene, dokler ga ne ustavis z `docker compose stop` ali `docker compose down`.
 
+Compose zazene tudi `news-events` research sidecar. Ta vsakih 15 minut osvezi public RSS event archive in lokalne diagnosticne reporte, vendar ne klice trading API-jev in ne oddaja paper orderjev.
+
 ## Kaj zna danes
 
 - watchlist za strict promoted-research universe, vkljucno z `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `XRPUSDT`, `BNBUSDT`
@@ -58,6 +60,7 @@ Container ima nastavljen `restart: unless-stopped`, zato se po ponovnem zagonu D
 - virtualni cash, pozicije, odprti orderji in PnL
 - trade log z notes in lokalno persistenco v SQLite
 - runtime telemetry archive v SQLite: recent tickerji, `1m/15m/1h/4h` svecke, USD-M funding, futures positioning metric rows, in `SignalAssistant` scorecard snapshots
+- public news/event archive v SQLite za raziskovalne diagnostike, brez vpliva na aktivne paper gate-e
 
 ## Kaj se ne dela se
 
@@ -104,6 +107,9 @@ Okoljske spremenljivke:
 - `RUNTIME_TELEMETRY_CANDLE_LIMIT=240`
 - `RUNTIME_TELEMETRY_FUTURES_ENABLED=true`
 - `RUNTIME_TELEMETRY_SIGNAL_EVALUATIONS=true`
+- `NEWS_EVENT_INTERVAL_SECONDS=900`
+- `NEWS_EVENT_COLLECTOR_LIMIT_PER_SOURCE=50`
+- `NEWS_EVENT_IMPACT_SINCE_HOURS=168`
 
 Docker Compose mapira `8081:3000`, zato je aplikacija lokalno dosegljiva na `http://localhost:8081`.
 
@@ -112,6 +118,28 @@ Forward paper report:
 ```bash
 python scripts/forward_paper_report.py --markdown-out tmp/forward_paper_report_latest.md --json-out tmp/forward_paper_report_latest.json
 ```
+
+Runtime telemetry report:
+
+```bash
+python scripts/runtime_telemetry_report.py --markdown-out tmp/runtime_telemetry_report_latest.md --json-out tmp/runtime_telemetry_report_latest.json
+```
+
+News/event diagnostics:
+
+```bash
+python scripts/news_event_collector.py --markdown-out tmp/news_event_collection_latest.md --json-out tmp/news_event_collection_latest.json
+python scripts/news_event_impact_dataset.py --markdown-out tmp/news_event_impact_latest.md --json-out tmp/news_event_impact_latest.json
+```
+
+The `news-events` sidecar runs these diagnostics automatically. Manual runs are useful for spot checks. The collector uses public RSS sources and a deterministic classifier to store news/event rows in `telemetry_news_events`. The impact dataset joins those rows to archived telemetry candles. These commands are research-only and do not alter active paper strategies.
+
+Future research sequence:
+
+1. collect durable market/news telemetry
+2. build market-memory features from collected data
+3. test higher-coverage candidates in the harness
+4. promote nothing unless all gates pass and the user explicitly approves paper trading
 
 Runtime/harness parity check:
 

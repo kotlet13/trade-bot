@@ -35,6 +35,25 @@ Runtime telemetry:
 - The archive stores recent ticker snapshots, `1m/15m/1h/4h` candles, USD-M funding, USD-M futures positioning rows, and `SignalAssistant` scorecard evaluations.
 - Telemetry is analysis-only. It does not change the active paper strategies, force entries, or enable live exchange execution.
 
+Telemetry report:
+
+```powershell
+python scripts\runtime_telemetry_report.py --markdown-out tmp\runtime_telemetry_report_latest.md --json-out tmp\runtime_telemetry_report_latest.json
+```
+
+The report reads the runtime telemetry archive and summarizes market breadth, futures data freshness, scorecard stages, failed gates, blocked READY setups, auto-paper decisions, and paper trade outcomes.
+
+News/event diagnostics:
+
+```powershell
+python scripts\news_event_collector.py --markdown-out tmp\news_event_collection_latest.md --json-out tmp\news_event_collection_latest.json
+python scripts\news_event_impact_dataset.py --markdown-out tmp\news_event_impact_latest.md --json-out tmp\news_event_impact_latest.json
+```
+
+The collector writes classified public RSS events to `telemetry_news_events`; the impact script joins them to archived candles and summarizes forward returns. This is research-only and does not change `ai_score_v2_base_score7`, `ai_score_v2_ablate_oi`, auto-paper slots, or live execution boundaries.
+
+Docker Compose also runs the `news-events` sidecar with `restart: unless-stopped`. The sidecar refreshes the same news/event diagnostics every `900` seconds and writes local latest reports under `tmp/`; it does not call paper-trading endpoints.
+
 Runtime/harness parity:
 
 ```powershell

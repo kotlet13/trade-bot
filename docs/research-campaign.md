@@ -193,3 +193,24 @@ Full result: `tmp/research_runs/ai_scorecard_v2_global_sweep_universe30_20260429
 Implemented on April 29, 2026 to make future analysis less dependent on ad hoc `tmp/` caches. The Rust runtime now creates SQLite archive tables for ticker snapshots, recent `1m/15m/1h/4h` candles, USD-M funding rows, USD-M futures metric rows, and `SignalAssistant` scorecard evaluations. The worker is low-frequency by default (`RUNTIME_TELEMETRY_INTERVAL_SECONDS=900`) and uses upserts so repeated cycles refresh recent rows instead of duplicating them.
 
 This is infrastructure only. It does not change `ai_score_v2_base_score7` or `ai_score_v2_ablate_oi`, does not promote research candidates, and does not add live exchange execution.
+
+## Public News/Event Diagnostics
+
+Implemented on April 29, 2026 as a bounded first step toward news-aware strategy research. `scripts/news_event_collector.py` fetches public RSS feeds, classifies events with a deterministic schema, and upserts them into `telemetry_news_events`. `scripts/news_event_impact_dataset.py` joins those classified events to archived telemetry candles and reports forward returns by event type, sentiment, and symbol.
+
+```powershell
+python scripts\news_event_collector.py --markdown-out tmp\news_event_collection_latest.md --json-out tmp\news_event_collection_latest.json
+python scripts\news_event_impact_dataset.py --markdown-out tmp\news_event_impact_latest.md --json-out tmp\news_event_impact_latest.json
+```
+
+First live diagnostic collected `145` events from CoinDesk, Cointelegraph, Decrypt, Fed, and SEC feeds. The impact pass produced `211` event-symbol rows. The only positive 60-minute bucket in that small sample was `macro_policy` (`16` samples, `+0.198%` average, `68.75%` positive). Generic, regulatory, security, and fund-flow buckets were weak or negative. Treat this as data plumbing and hypothesis generation only; it is not a promotion candidate and does not change the active paper setup.
+
+The `news-events` Docker Compose sidecar now runs `scripts/news_event_service.py` every `900` seconds with `restart: unless-stopped`. Each cycle refreshes the public RSS event archive, the event-impact dataset, and the runtime telemetry report. It only writes `telemetry_news_events` and ignored `tmp/*latest.*` report artifacts; it does not call paper-trading endpoints.
+
+## Next Research Layer
+
+The intended sequence after durable telemetry collection is:
+
+1. Build a market-memory dataset from collected telemetry, including BTC cycle/halving phase, day/session/month effects, BTC regime, event proximity, event type, event sentiment, and per-symbol event sensitivity.
+2. Convert the strongest diagnostics into harness-only higher-coverage candidates: broader reclaim variants, macro-policy filters, news-shock-then-reclaim entries, cycle-aware symbol variants, and lower score thresholds only with stricter regime filters.
+3. Keep every new candidate out of paper trading until it passes the documented promotion gates and the user explicitly approves promotion.
