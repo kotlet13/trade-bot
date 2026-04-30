@@ -3874,7 +3874,6 @@
 - Top gate failures: `not_full_12000_candle_walk_forward, executed_trades<80, net_avg_r<0.1, profit_factor<1.25, holdout_net_total_r<=0, holdout_net_avg_r<0.05, folds_positive<4, symbol_concentration>0.4, single_trade_concentration>0.25`
 - Top gate failure counts: `not_full_12000_candle_walk_forward=6, executed_trades<80=6, net_avg_r<0.1=6, profit_factor<1.25=6, holdout_net_total_r<=0=6`
 - Promoted strategies: `none`
-
 ### Research campaign 2026-04-26T09:54:19Z
 
 - Status: `done`
@@ -4917,3 +4916,31 @@ Interpretation:
 - `rs_htf_quality_s5` was almost identical with `76` trades, `10.641R`, `0.14R`, `pf=1.6482`, and the same two gate failures.
 - Broader HTF variants cleared trade count (`151` to `169` trades) but quality dropped below promotion thresholds and drawdown rose above `10R`.
 - This is the best new option path so far. The next bounded follow-up should refine HTF relative-strength continuation to recover a few trades while improving fold stability, not promote it directly.
+
+### Relative-strength refinement implementation 2026-04-30
+
+- Status: `implemented`
+- Scope: `relative_strength_refinement`
+- Candidate count: `14`
+- Runtime impact: none; active paper setup remains `ai_score_v2_base_score7` primary and `ai_score_v2_ablate_oi` secondary
+- Research intent: focus the near-miss HTF relative-strength continuation branch instead of broadening into unrelated entries
+- Starting point: `rs_htf_quality_s6` and `rs_htf_quality_s5` had good OOS quality but failed trade count (`74`/`76`) and fold stability; validation fold 2 had no HTF long trades, so this is a structural risk
+- Variants tested: relative-strength thresholds `0.60`/`0.65`/`0.70`/`0.80`, wider breadth and BTC bands, looser positioning caps, OI-change cap, target multiple `1.2`, max hold `24` bars, and London/overlap session focus
+- Boundary: harness-only; no paper strategy change unless a candidate later passes promotion gates and the user explicitly approves promotion
+- Smoke command: `python scripts\research_harness.py --smoke --candidate-family relative_strength_refinement --workers 2 --json-out tmp\research_runs\smoke_relative_strength_refinement.json`
+- Full command: `python scripts\research_harness.py --candidate-family relative_strength_refinement --trigger-limit 12000 --universe-limit 30 --workers 2 --json-out tmp\research_runs\relative_strength_refinement_universe30_20260430.json`
+
+### Research campaign 2026-04-30T21:22:14Z
+
+- Status: `done`
+- Scope: `4-week-profitability-campaign`
+- Artifact: `tmp\research_runs\smoke_relative_strength_refinement.json`
+- Universe: `BTCUSDT, ETHUSDT, SOLUSDT`
+- Candidates tested: `6`
+- Universe filter: `profile=strict`, `min_quote_volume=5000000.0`
+- Top candidate: `rs_refine_htf_quality_s5_control`
+- Top OOS: `trades=0`, `net_total_r=0`, `net_avg_r=0.0`, `pf=0.0`
+- Top gate status: `fail`
+- Top gate failures: `not_full_12000_candle_walk_forward, executed_trades<80, net_avg_r<0.1, profit_factor<1.25, holdout_net_total_r<=0, holdout_net_avg_r<0.05, folds_positive<4`
+- Top gate failure counts: `not_full_12000_candle_walk_forward=6, executed_trades<80=6, net_avg_r<0.1=6, profit_factor<1.25=6, holdout_net_total_r<=0=6`
+- Promoted strategies: `none`

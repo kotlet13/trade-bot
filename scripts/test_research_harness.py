@@ -824,6 +824,19 @@ class ResearchHarnessFixtures(unittest.TestCase):
         self.assertIn("rs_opening_breakout_active_s5", names)
         self.assertIn("rs_v2_moderate_active_s5", names)
 
+    def test_relative_strength_refinement_candidates_are_available(self) -> None:
+        focused = [
+            candidate for candidate in harness.build_candidates() if candidate.family == "relative_strength_refinement"
+        ]
+        names = {candidate.name for candidate in focused}
+        self.assertEqual(len(focused), 14)
+        self.assertIn("rs_refine_htf_quality_s5_control", names)
+        self.assertIn("rs_refine_htf_quality_s6_control", names)
+        self.assertIn("rs_refine_htf_quality_s5_rs65", names)
+        self.assertIn("rs_refine_htf_position_loose_s5", names)
+        self.assertIn("rs_refine_htf_quality_s5_oi_max2", names)
+        self.assertIn("rs_refine_htf_overlap_rs80", names)
+
     def test_ai_scorecard_ablation_removes_only_selected_component(self) -> None:
         signal_time, funding_rows, metric_rows = self.make_scorecard_context()
         base_candidate = harness.CandidateSpec(

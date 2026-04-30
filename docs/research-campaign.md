@@ -242,3 +242,10 @@ python scripts\research_harness.py --candidate-family relative_strength_continua
 This family is harness-only. It should not affect `ai_score_v2_base_score7`, `ai_score_v2_ablate_oi`, or auto-paper unless a candidate later passes promotion gates and receives explicit user approval.
 
 Full result: `tmp/research_runs/relative_strength_continuation_universe30_20260430.json` completed with `12` candidates and `0` promotion passes. The best two candidates were `rs_htf_quality_s6` (`74` trades, `10.7718R` net, `0.1456R` average, `pf=1.6633`, `max_drawdown=6.5898R`, holdout `12.2393R`) and `rs_htf_quality_s5` (`76` trades, `10.641R` net, `0.14R` average, `pf=1.6482`, `max_drawdown=6.5898R`, holdout `12.1085R`). Both failed only trade count and fold stability. Broader HTF variants cleared trade count but lost too much quality and drawdown control. Conclusion: relative-strength HTF continuation is the best new option path so far, but it needs a focused follow-up that targets the missing `4/5` fold stability without collapsing the trade count below `80`. No runtime or paper-bot change is warranted from this run.
+
+That follow-up is implemented as the `relative_strength_refinement` harness family. It is focused on HTF continuation only and varies relative-strength threshold, breadth band, BTC return band, positioning caps, OI-change cap, target multiple, max hold bars, and London/overlap session selection around the `rs_htf_quality_*` near miss.
+
+```powershell
+python scripts\research_harness.py --smoke --candidate-family relative_strength_refinement --workers 2 --json-out tmp\research_runs\smoke_relative_strength_refinement.json
+python scripts\research_harness.py --candidate-family relative_strength_refinement --trigger-limit 12000 --universe-limit 30 --workers 2 --json-out tmp\research_runs\relative_strength_refinement_universe30_latest.json
+```
