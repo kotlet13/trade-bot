@@ -1188,7 +1188,7 @@ fn initialize_database(
     connection.busy_timeout(Duration::from_secs(5))?;
     connection.execute_batch(
         "
-        PRAGMA journal_mode = WAL;
+        PRAGMA journal_mode = DELETE;
         PRAGMA synchronous = NORMAL;
 
         CREATE TABLE IF NOT EXISTS account (

@@ -36,6 +36,7 @@ services:
       NEWS_EVENT_INTERVAL_SECONDS: "900"
       NEWS_EVENT_COLLECTOR_LIMIT_PER_SOURCE: "50"
       NEWS_EVENT_IMPACT_SINCE_HOURS: "168"
+      NEWS_EVENT_MARKET_MEMORY_SINCE_HOURS: "168"
     volumes:
       - ./scripts:/app/scripts
       - ./data:/app/data

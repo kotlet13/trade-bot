@@ -12,6 +12,7 @@ from pathlib import Path
 DEFAULT_INTERVAL_SECONDS = 900
 DEFAULT_COLLECTOR_LIMIT_PER_SOURCE = 50
 DEFAULT_IMPACT_SINCE_HOURS = 168.0
+DEFAULT_MARKET_MEMORY_SINCE_HOURS = 168.0
 
 
 def utc_now() -> str:
@@ -64,7 +65,11 @@ def run_command(command: list[str]) -> int:
     return int(completed.returncode)
 
 
-def cycle_commands(limit_per_source: int, impact_since_hours: float) -> list[list[str]]:
+def cycle_commands(
+    limit_per_source: int,
+    impact_since_hours: float,
+    market_memory_since_hours: float,
+) -> list[list[str]]:
     python = sys.executable
     return [
         [
@@ -89,6 +94,16 @@ def cycle_commands(limit_per_source: int, impact_since_hours: float) -> list[lis
         ],
         [
             python,
+            "scripts/market_memory_dataset.py",
+            "--since-hours",
+            str(market_memory_since_hours),
+            "--markdown-out",
+            "tmp/market_memory_latest.md",
+            "--json-out",
+            "tmp/market_memory_latest.json",
+        ],
+        [
+            python,
             "scripts/runtime_telemetry_report.py",
             "--markdown-out",
             "tmp/runtime_telemetry_report_latest.md",
@@ -98,10 +113,13 @@ def cycle_commands(limit_per_source: int, impact_since_hours: float) -> list[lis
     ]
 
 
-def run_cycle(limit_per_source: int, impact_since_hours: float) -> bool:
+def run_cycle(limit_per_source: int, impact_since_hours: float, market_memory_since_hours: float) -> bool:
     Path("tmp").mkdir(parents=True, exist_ok=True)
     print(f"[{utc_now()}] news event research cycle started", flush=True)
-    return_codes = [run_command(command) for command in cycle_commands(limit_per_source, impact_since_hours)]
+    return_codes = [
+        run_command(command)
+        for command in cycle_commands(limit_per_source, impact_since_hours, market_memory_since_hours)
+    ]
     ok = all(code == 0 for code in return_codes)
     status = "succeeded" if ok else f"completed with nonzero exits {return_codes}"
     print(f"[{utc_now()}] news event research cycle {status}", flush=True)
@@ -112,20 +130,22 @@ def main() -> int:
     interval_seconds = env_int("NEWS_EVENT_INTERVAL_SECONDS", DEFAULT_INTERVAL_SECONDS)
     limit_per_source = env_int("NEWS_EVENT_COLLECTOR_LIMIT_PER_SOURCE", DEFAULT_COLLECTOR_LIMIT_PER_SOURCE)
     impact_since_hours = env_float("NEWS_EVENT_IMPACT_SINCE_HOURS", DEFAULT_IMPACT_SINCE_HOURS)
+    market_memory_since_hours = env_float("NEWS_EVENT_MARKET_MEMORY_SINCE_HOURS", DEFAULT_MARKET_MEMORY_SINCE_HOURS)
     run_once = os.environ.get("NEWS_EVENT_RUN_ONCE", "").strip().lower() in {"1", "true", "yes"}
 
     print(
-        "[{}] news event service enabled: interval={}s, limit_per_source={}, impact_since_hours={}".format(
+        "[{}] news event service enabled: interval={}s, limit_per_source={}, impact_since_hours={}, market_memory_since_hours={}".format(
             utc_now(),
             interval_seconds,
             limit_per_source,
             impact_since_hours,
+            market_memory_since_hours,
         ),
         flush=True,
     )
 
     while True:
-        run_cycle(limit_per_source, impact_since_hours)
+        run_cycle(limit_per_source, impact_since_hours, market_memory_since_hours)
         if run_once:
             return 0
         print(f"[{utc_now()}] sleeping {interval_seconds}s", flush=True)

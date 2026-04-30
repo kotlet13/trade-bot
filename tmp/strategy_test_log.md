@@ -4807,3 +4807,16 @@ Interpretation:
 - Cycle commands: public RSS collector, news-event impact dataset, runtime telemetry report
 - Boundary: research-only; no `/api/paper/*` calls, no forced trades, no candidate promotion
 - Next planned research layer: market-memory dataset, then harness-only higher-coverage candidates, then promotion only if gates pass and user explicitly approves.
+
+### Market-memory dataset implementation 2026-04-30
+
+- Status: `implemented`
+- Scope: `market-memory-research-diagnostics`
+- Runtime impact: none; active paper setup remains `ai_score_v2_base_score7` primary and `ai_score_v2_ablate_oi` secondary
+- Script: `scripts\market_memory_dataset.py`
+- Test: `scripts\test_market_memory_dataset.py`
+- Outputs: `tmp\market_memory_latest.md`, `tmp\market_memory_latest.json`
+- Sidecar refresh: `scripts\news_event_service.py` now refreshes market memory each cycle
+- Feature surface: BTC cycle/halving phase, session/day/month, BTC regime, 1h/4h returns, futures bias, OI change, market-wide and symbol-specific news proximity, signal context, paper-decision context, and forward returns
+- Boundary: diagnostic dataset only; no candidate promotion and no paper strategy change
+- SQLite compatibility note: runtime DB journal mode now uses `DELETE` instead of WAL so the Rust app and Python sidecar can share the Docker Desktop/Windows bind-mounted database.

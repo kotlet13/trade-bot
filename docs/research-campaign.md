@@ -205,12 +205,20 @@ python scripts\news_event_impact_dataset.py --markdown-out tmp\news_event_impact
 
 First live diagnostic collected `145` events from CoinDesk, Cointelegraph, Decrypt, Fed, and SEC feeds. The impact pass produced `211` event-symbol rows. The only positive 60-minute bucket in that small sample was `macro_policy` (`16` samples, `+0.198%` average, `68.75%` positive). Generic, regulatory, security, and fund-flow buckets were weak or negative. Treat this as data plumbing and hypothesis generation only; it is not a promotion candidate and does not change the active paper setup.
 
-The `news-events` Docker Compose sidecar now runs `scripts/news_event_service.py` every `900` seconds with `restart: unless-stopped`. Each cycle refreshes the public RSS event archive, the event-impact dataset, and the runtime telemetry report. It only writes `telemetry_news_events` and ignored `tmp/*latest.*` report artifacts; it does not call paper-trading endpoints.
+The `news-events` Docker Compose sidecar now runs `scripts/news_event_service.py` every `900` seconds with `restart: unless-stopped`. Each cycle refreshes the public RSS event archive, the event-impact dataset, the market-memory dataset, and the runtime telemetry report. It only writes `telemetry_news_events` and ignored `tmp/*latest.*` report artifacts; it does not call paper-trading endpoints.
 
 ## Next Research Layer
 
+The market-memory dataset is implemented in `scripts/market_memory_dataset.py`:
+
+```powershell
+python scripts\market_memory_dataset.py --markdown-out tmp\market_memory_latest.md --json-out tmp\market_memory_latest.json
+```
+
+It creates per-symbol `15m` rows from runtime telemetry with BTC cycle/halving phase, session/day/month, BTC regime, futures bias, market-wide and symbol-specific news proximity, signal context, paper-decision context, and forward returns. This is still diagnostic only.
+
 The intended sequence after durable telemetry collection is:
 
-1. Build a market-memory dataset from collected telemetry, including BTC cycle/halving phase, day/session/month effects, BTC regime, event proximity, event type, event sentiment, and per-symbol event sensitivity.
+1. Use market-memory diagnostics to identify robust regimes and symbol-specific behavior.
 2. Convert the strongest diagnostics into harness-only higher-coverage candidates: broader reclaim variants, macro-policy filters, news-shock-then-reclaim entries, cycle-aware symbol variants, and lower score thresholds only with stricter regime filters.
 3. Keep every new candidate out of paper trading until it passes the documented promotion gates and the user explicitly approves promotion.

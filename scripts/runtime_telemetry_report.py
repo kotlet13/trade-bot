@@ -106,7 +106,8 @@ def load_data(db_path: Path, since_ms: int | None) -> dict[str, list[dict[str, A
     if not db_path.exists():
         raise FileNotFoundError(f"Database not found: {db_path}")
 
-    with sqlite3.connect(db_path) as connection:
+    with sqlite3.connect(db_path, timeout=30.0) as connection:
+        connection.execute("PRAGMA busy_timeout = 30000")
         return {
             "tickers": load_table(connection, "telemetry_market_tickers", "snapshot_time", since_ms),
             "candles": load_table(connection, "telemetry_candles", "fetched_at", since_ms),

@@ -276,7 +276,8 @@ def main() -> int:
     since_ms = None if args.all else since_ms_from_hours(args.since_hours)
     market_symbols = parse_csv(args.market_symbols)
     horizons = [int(item) for item in parse_csv(args.horizons)]
-    with sqlite3.connect(args.db) as connection:
+    with sqlite3.connect(args.db, timeout=30.0) as connection:
+        connection.execute("PRAGMA busy_timeout = 30000")
         events = load_events(connection, since_ms)
         event_symbols = sorted(
             {

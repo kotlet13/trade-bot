@@ -3,6 +3,7 @@ data/paper_state.json
 data/*.db
 data/*.db-wal
 data/*.db-shm
+data/*.db-journal
 scripts/__pycache__/
 __pycache__/
 *.pyc
@@ -16,4 +17,5 @@ tmp/forward_paper_report_latest.*
 tmp/runtime_telemetry_report_latest.*
 tmp/news_event_collection_latest.*
 tmp/news_event_impact_latest.*
+tmp/market_memory_latest.*
 tmp/runtime_harness_parity*_latest.*

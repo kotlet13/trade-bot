@@ -538,7 +538,8 @@ def main() -> int:
     changed: int | None = None
     if not args.dry_run:
         args.db.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(args.db) as connection:
+        with sqlite3.connect(args.db, timeout=30.0) as connection:
+            connection.execute("PRAGMA busy_timeout = 30000")
             changed = upsert_events(connection, events)
 
     payload = {

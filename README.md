@@ -110,6 +110,7 @@ Okoljske spremenljivke:
 - `NEWS_EVENT_INTERVAL_SECONDS=900`
 - `NEWS_EVENT_COLLECTOR_LIMIT_PER_SOURCE=50`
 - `NEWS_EVENT_IMPACT_SINCE_HOURS=168`
+- `NEWS_EVENT_MARKET_MEMORY_SINCE_HOURS=168`
 
 Docker Compose mapira `8081:3000`, zato je aplikacija lokalno dosegljiva na `http://localhost:8081`.
 
@@ -130,9 +131,10 @@ News/event diagnostics:
 ```bash
 python scripts/news_event_collector.py --markdown-out tmp/news_event_collection_latest.md --json-out tmp/news_event_collection_latest.json
 python scripts/news_event_impact_dataset.py --markdown-out tmp/news_event_impact_latest.md --json-out tmp/news_event_impact_latest.json
+python scripts/market_memory_dataset.py --markdown-out tmp/market_memory_latest.md --json-out tmp/market_memory_latest.json
 ```
 
-The `news-events` sidecar runs these diagnostics automatically. Manual runs are useful for spot checks. The collector uses public RSS sources and a deterministic classifier to store news/event rows in `telemetry_news_events`. The impact dataset joins those rows to archived telemetry candles. These commands are research-only and do not alter active paper strategies.
+The `news-events` sidecar runs these diagnostics automatically. Manual runs are useful for spot checks. The collector uses public RSS sources and a deterministic classifier to store news/event rows in `telemetry_news_events`. The impact dataset joins those rows to archived telemetry candles. The market-memory dataset adds BTC regime, session/calendar, futures bias, market-wide and symbol-specific news proximity, signal, and paper-decision context. These commands are research-only and do not alter active paper strategies.
 
 Future research sequence:
 

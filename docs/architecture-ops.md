@@ -130,6 +130,8 @@ Runtime telemetry archive je locen od paper ledgerja in ne oddaja orderjev. Priv
 - `telemetry_signal_evaluations`: `SignalAssistant` snapshots, kadar jih runtime ze izracuna za dashboard ali auto-paper cycle
 - `telemetry_news_events`: research-only public RSS event classifications for news-impact diagnostics
 
+SQLite uporablja `DELETE` journal mode namesto WAL, da lahko Rust app in Python research sidecar zanesljivo delita isti bind-mounted DB na Docker Desktop/Windows. Skripte in app uporabljajo kratke busy timeoute; to je primerneje za lokalni nizkofrekvencni research workload kot locena baza.
+
 Telemetry porocilo:
 
 ```powershell
@@ -141,15 +143,17 @@ News/event zbiranje in impact diagnostika:
 ```powershell
 python scripts\news_event_collector.py --markdown-out tmp\news_event_collection_latest.md --json-out tmp\news_event_collection_latest.json
 python scripts\news_event_impact_dataset.py --markdown-out tmp\news_event_impact_latest.md --json-out tmp\news_event_impact_latest.json
+python scripts\market_memory_dataset.py --markdown-out tmp\market_memory_latest.md --json-out tmp\market_memory_latest.json
 ```
 
-Collector uporablja javne RSS vire in deterministicen classifier. Impact script poveze dogodke z arhiviranimi `15m` sveckami in izracuna forward return po tipu dogodka, sentimentu in simbolu. To je research-only infrastruktura in ne spreminja runtime paper gate-ov.
+Collector uporablja javne RSS vire in deterministicen classifier. Impact script poveze dogodke z arhiviranimi `15m` sveckami in izracuna forward return po tipu dogodka, sentimentu in simbolu. Market-memory script zdruzi BTC regime, session/calendar, futures bias, market-wide in symbol-specific news proximity, signal, in paper-decision context. To je research-only infrastruktura in ne spreminja runtime paper gate-ov.
 
 `news-events` sidecar:
 
 - uporablja `restart: unless-stopped`, enako kot glavna aplikacija
 - deli `./data` in `./tmp` volume z lokalnim repozitorijem
 - izvaja `scripts/news_event_service.py`
+- osvezuje news/event, market-memory, in telemetry report artefakte pod `tmp/`
 - ne klice `/api/paper/*` endpointov in ne oddaja orderjev
 
 Operativna posledica:
@@ -178,6 +182,7 @@ Privzeta konfiguracija:
 - `NEWS_EVENT_INTERVAL_SECONDS=900`
 - `NEWS_EVENT_COLLECTOR_LIMIT_PER_SOURCE=50`
 - `NEWS_EVENT_IMPACT_SINCE_HOURS=168`
+- `NEWS_EVENT_MARKET_MEMORY_SINCE_HOURS=168`
 
 Lokalni dostop:
 
