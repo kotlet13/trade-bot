@@ -9,6 +9,7 @@ Current active gated paper strategies:
 - Runtime: `SignalAssistant` and the auto-paper worker
 - Execution: local SQLite paper trades only
 - Live funds: disabled
+- Default runtime config: auto-paper is disabled in `docker-compose.yml` unless `AUTO_PAPER_TRADING=true` is explicitly set
 
 The secondary bot uses the same reclaim setup, score threshold, guardrails, stop/TP handling, and fresh public Binance USD-M data requirements, but ignores the OI-change score component. The focused confirmation artifact is `tmp/research_runs/ai_scorecard_v2_ablate_oi_confirm_universe30_20260428.json`.
 
@@ -17,9 +18,12 @@ Guardrails:
 - One global auto-paper slot
 - No BTC entries
 - No duplicate entry for the same `strategy_version + symbol + signal_close_time`
+- No duplicate entry across primary and secondary for the same `symbol + signal_close_time` unless `AUTO_PAPER_ALLOW_MULTI_STRATEGY_SAME_SIGNAL=true`
 - Max `3` auto entries per UTC day
 - Daily realized-loss kill switch at `2%`
 - Entry requires the approved scorecard gate, attached stop-loss, and TP1
+
+Runtime paper exits currently use a single full-position attached stop-loss and TP1. The research harness also has `runtime_exit_parity` candidates so this simpler runtime exit model can be compared directly against the older TP1/break-even/TP2 research exit model without changing the active paper strategies.
 
 Forward paper analytics:
 
@@ -27,7 +31,15 @@ Forward paper analytics:
 python scripts\forward_paper_report.py --markdown-out tmp\forward_paper_report_latest.md --json-out tmp\forward_paper_report_latest.json
 ```
 
-The report reads `data/tradebot.db` and summarizes auto-paper entries, rejected technical-ready setups, blockers, exits, realized PnL, and realized R.
+The report reads `data/tradebot.db` and summarizes auto-paper entries, rejected technical-ready setups, blockers, exits, realized PnL/R, strategy/symbol/session/day/outcome groupings, open-trade validity, conflict skips, and rejected-setup follow-up when telemetry is available.
+
+Daily diagnostics:
+
+```powershell
+python scripts\daily_paper_diagnostics.py
+```
+
+This command is read-only. It writes latest reports under `tmp/`, runs parity for both active strategies, continues after individual report failures, and does not call `/api/paper/*`.
 
 Runtime telemetry:
 
@@ -58,11 +70,11 @@ Docker Compose also runs the `news-events` sidecar with `restart: unless-stopped
 Runtime/harness parity:
 
 ```powershell
-python scripts\runtime_harness_parity.py --symbols ETHUSDT,SOLUSDT --markdown-out tmp\runtime_harness_parity_latest.md --json-out tmp\runtime_harness_parity_latest.json
-python scripts\runtime_harness_parity.py --strategy ai_score_v2_ablate_oi --symbols ETHUSDT,SOLUSDT --markdown-out tmp\runtime_harness_parity_oi_latest.md --json-out tmp\runtime_harness_parity_oi_latest.json
+python scripts\runtime_harness_parity.py --strategy ai_score_v2_base_score7 --symbols ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT --markdown-out tmp\runtime_harness_parity_base_latest.md --json-out tmp\runtime_harness_parity_base_latest.json
+python scripts\runtime_harness_parity.py --strategy ai_score_v2_ablate_oi --symbols ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT --markdown-out tmp\runtime_harness_parity_oi_latest.md --json-out tmp\runtime_harness_parity_oi_latest.json
 ```
 
-The parity report compares the live `SignalAssistant` technical stage, AI score, and paper-risk-plan availability against an independent Python evaluation using the selected promoted research harness candidate.
+The parity report compares the live `SignalAssistant` technical stage, AI score, risk-plan availability, signal close time, funding/futures data availability, and live-only news-gate effects against an independent Python evaluation using the selected promoted research harness candidate. It exits `0` only when there are no warnings.
 
 Scorecard ablation research:
 

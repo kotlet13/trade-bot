@@ -26,7 +26,7 @@ Use `--universe-profile permissive` only for exploratory research, not for promo
 ## Checks
 
 ```powershell
-python -m py_compile scripts/strategy_study.py scripts/research_harness.py scripts/derivatives_data.py scripts/derivatives_research.py scripts/backfill_metrics.py scripts/event_dataset.py scripts/predictive_meta_model.py scripts/test_research_harness.py scripts/test_derivatives_data.py scripts/test_backfill_metrics.py scripts/test_event_dataset.py scripts/test_predictive_meta_model.py
+python -m py_compile scripts/strategy_study.py scripts/research_harness.py scripts/derivatives_data.py scripts/derivatives_research.py scripts/backfill_metrics.py scripts/event_dataset.py scripts/predictive_meta_model.py scripts/runtime_harness_parity.py scripts/forward_paper_report.py scripts/daily_paper_diagnostics.py scripts/test_research_harness.py scripts/test_derivatives_data.py scripts/test_backfill_metrics.py scripts/test_event_dataset.py scripts/test_predictive_meta_model.py
 python scripts/test_research_harness.py
 python scripts/test_derivatives_data.py
 python scripts/test_backfill_metrics.py
@@ -249,3 +249,52 @@ That follow-up is implemented as the `relative_strength_refinement` harness fami
 python scripts\research_harness.py --smoke --candidate-family relative_strength_refinement --workers 2 --json-out tmp\research_runs\smoke_relative_strength_refinement.json
 python scripts\research_harness.py --candidate-family relative_strength_refinement --trigger-limit 12000 --universe-limit 30 --workers 2 --json-out tmp\research_runs\relative_strength_refinement_universe30_latest.json
 ```
+
+Full result: `tmp/research_runs/relative_strength_refinement_universe30_20260430.json` completed with `14` candidates and `0` promotion passes. The best aggregate candidate was `rs_refine_htf_position_loose_s5` with `104` OOS trades, `13.0259R` net, `0.1252R` average, `pf=1.5443`, `max_drawdown=7.8974R`, and holdout `15.5565R`, but it still failed fold stability with only `1/5` positive folds. This is not a promotion candidate because the result is heavily holdout-skewed; validation was negative while holdout carried the edge. Every refinement variant failed `folds_positive<4`, so the next useful step is split/regime diagnostics around why validation folds are dead or negative, not another paper-bot change.
+
+## Runtime/Harness Parity And Fill Realism
+
+The daily read-only workflow is:
+
+```powershell
+docker compose up --build
+python scripts\forward_paper_report.py --markdown-out tmp\forward_paper_report_latest.md --json-out tmp\forward_paper_report_latest.json
+python scripts\runtime_harness_parity.py --strategy ai_score_v2_base_score7 --symbols ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT --markdown-out tmp\runtime_harness_parity_base_latest.md --json-out tmp\runtime_harness_parity_base_latest.json
+python scripts\runtime_harness_parity.py --strategy ai_score_v2_ablate_oi --symbols ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT --markdown-out tmp\runtime_harness_parity_oi_latest.md --json-out tmp\runtime_harness_parity_oi_latest.json
+```
+
+`scripts\daily_paper_diagnostics.py` orchestrates those reports plus runtime telemetry and optional market-memory reporting. It is read-only and does not call `/api/paper/*`.
+
+The research harness now supports conservative fill realism with `--strict-fills`, `--entry-slippage-bps`, `--stop-slippage-bps`, `--tp-slippage-bps`, and `--no-slippage`. Legacy behavior remains the default unless strict fills or explicit slippage arguments are provided. The JSON artifact records the fill settings in `settings.fill_settings`.
+
+The active runtime paper executor still uses a single full-position attached stop-loss and TP1. To avoid claiming identical behavior between runtime and older TP1/break-even/TP2 harness exits, the harness includes `runtime_exit_parity` candidates:
+
+```powershell
+python scripts\research_harness.py --candidate-family runtime_exit_parity --trigger-limit 12000 --universe-limit 30 --workers 2 --json-out tmp\research_runs\runtime_exit_parity_universe30_latest.json
+```
+
+These are comparison candidates only. They do not change `ai_score_v2_base_score7`, `ai_score_v2_ablate_oi`, or the running bot.
+
+## Regime Abstention
+
+The `regime_abstention_filters` family is harness-only. It tests the approved scorecard and OI-ablation branches with abstention filters around BTC 24h return bands, basket breadth bands, funding-not-panic, global account caps, top-position caps, volatility shock blocking, and London/overlap selection.
+
+```powershell
+python scripts\research_harness.py --candidate-family regime_abstention_filters --trigger-limit 12000 --universe-limit 30 --workers 2 --json-out tmp\research_runs\regime_abstention_filters_universe30_latest.json
+```
+
+No candidate from this family should be wired into runtime unless it passes the normal promotion gates and receives explicit user approval.
+
+Full result: `tmp/research_runs/regime_abstention_filters_universe30_latest.json` completed on May 1, 2026 with `12` candidates and `0` promotion passes. The top candidate was `regime_abs_oi_funding_not_panic_s7` with `64` OOS trades, `18.1228R` net, `0.2832R` average, `pf=1.7027`, `max_drawdown=4.9267R`, holdout `1.9436R`, and `4/5` positive folds. It failed the promotion gate only on `executed_trades<80`. This is a useful abstention signal, not a runtime promotion.
+
+## Relative Strength Follow-up
+
+`relative_strength_refinement` now includes the requested bounded follow-up dimensions around the near-miss HTF branch: relative-strength thresholds through `0.75`, constructive BTC/breadth bands, taker-buy pressure, global-account and top-position caps, target/hold variants, and London/overlap session selection.
+
+```powershell
+python scripts\research_harness.py --candidate-family relative_strength_refinement --trigger-limit 12000 --universe-limit 30 --workers 2 --json-out tmp\research_runs\relative_strength_refinement_universe30_latest.json
+```
+
+Backtests are hypothesis filters, not proof. Forward-paper results remain the main evidence before any testnet discussion, and there is no live trading without a separate safety review.
+
+Full result: `tmp/research_runs/relative_strength_refinement_universe30_20260501.json` completed on May 1, 2026 with `17` candidates and `0` promotion passes. The top candidate was still `rs_refine_htf_position_loose_s5`, now with `88` OOS trades, `15.4961R` net, `0.1761R` average, `pf=1.8655`, `max_drawdown=5.6977R`, and holdout `18.0004R`, but only `1/5` validation folds were positive. The result remains holdout-skewed, so no runtime or paper-bot change is warranted.

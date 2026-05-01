@@ -56,14 +56,16 @@ Vrne:
 Auto-paper worker:
 
 - vklopi ga `AUTO_PAPER_TRADING=true`
+- `docker-compose.yml` ga privzeto nastavi na `false`; vklopi se samo z eksplicitno spremembo env var
 - preverja promoted watchlist na `AUTO_PAPER_INTERVAL_SECONDS`
 - uporablja `ai_score_v2_base_score7` in `ai_score_v2_ablate_oi` gate kot `SignalAssistant`
 - odda samo lokalni paper market buy v SQLite ledger, brez exchange API-ja
 - ima en globalni auto slot (`AUTO_PAPER_MAX_OPEN_SLOTS=1`)
 - ne ponovi istega `strategy + symbol + signal_close_time` signala zaradi `auto_paper_decisions` idempotency tabele
+- ne dovoli duplicate same-symbol/same-signal entryja cez primary/secondary strategijo, razen ce je `AUTO_PAPER_ALLOW_MULTI_STRATEGY_SAME_SIGNAL=true`
 - dnevni cap: `AUTO_PAPER_MAX_DAILY_ENTRIES`
 - kill switch: blokira nove auto entryje, ko dnevni realized PnL pade pod `AUTO_PAPER_MAX_DAILY_LOSS_PERCENT`
-- izhodi so se vedno lokalni price-triggerji na attached stop-loss / take-profit
+- izhodi so se vedno lokalni price-triggerji na single full-position attached stop-loss / TP1
 
 ### `GET /api/replay`
 
@@ -83,7 +85,7 @@ Pomembna meja trenutne verzije:
 - replay zdaj uposteva session in BTC correlation gate
 - `news blackout` ostaja live-only, ker javni RSS viri niso zgodovinski replay dataset
 - ni exchange-accurate fill simulator
-- ni komisijskega/slippage modela za replay
+- research harness ima opcijski `--strict-fills` fill/slippage model; UI replay ostaja preprost signal replay
 
 Query parametra:
 
@@ -138,6 +140,14 @@ Telemetry porocilo:
 python scripts\runtime_telemetry_report.py --markdown-out tmp\runtime_telemetry_report_latest.md --json-out tmp\runtime_telemetry_report_latest.json
 ```
 
+Recommended daily read-only diagnostics:
+
+```powershell
+python scripts\daily_paper_diagnostics.py
+```
+
+This command orchestrates forward paper reporting, runtime telemetry reporting, parity for both active strategies, and market-memory reporting when the DB has the required telemetry. It does not place trades and does not call `/api/paper/*`.
+
 News/event zbiranje in impact diagnostika:
 
 ```powershell
@@ -174,6 +184,12 @@ Privzeta konfiguracija:
 - `STARTING_CASH=10000`
 - `PAPER_FEE_BPS=10`
 - `DEFAULT_INTERVAL=1m`
+- `AUTO_PAPER_TRADING=false`
+- `AUTO_PAPER_INTERVAL_SECONDS=60`
+- `AUTO_PAPER_MAX_OPEN_SLOTS=1`
+- `AUTO_PAPER_ALLOW_MULTI_STRATEGY_SAME_SIGNAL=false`
+- `AUTO_PAPER_MAX_DAILY_ENTRIES=3`
+- `AUTO_PAPER_MAX_DAILY_LOSS_PERCENT=2`
 - `RUNTIME_TELEMETRY_ENABLED=true`
 - `RUNTIME_TELEMETRY_INTERVAL_SECONDS=900`
 - `RUNTIME_TELEMETRY_CANDLE_LIMIT=240`

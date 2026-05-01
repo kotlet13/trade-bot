@@ -122,6 +122,8 @@ struct AutoPaperConfig {
     max_open_slots: usize,
     max_daily_entries: usize,
     max_daily_loss_percent: f64,
+    allow_multi_strategy_same_signal: bool,
+    prefer_secondary_on_score_tie: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -716,6 +718,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .and_then(|value| value.parse().ok())
             .unwrap_or(DEFAULT_AUTO_PAPER_MAX_DAILY_LOSS_PERCENT)
             .max(0.1),
+        allow_multi_strategy_same_signal: env_bool(
+            "AUTO_PAPER_ALLOW_MULTI_STRATEGY_SAME_SIGNAL",
+            false,
+        ),
+        prefer_secondary_on_score_tie: env_bool("AUTO_PAPER_PREFER_SECONDARY_ON_SCORE_TIE", false),
     };
     let telemetry = RuntimeTelemetryConfig {
         enabled: env_bool("RUNTIME_TELEMETRY_ENABLED", true),
@@ -1730,12 +1737,13 @@ fn process_price_events(
 
 async fn auto_paper_worker(state: AppState) {
     println!(
-        "auto-paper worker enabled: strategies={}, interval={}s, max_open_slots={}, max_daily_entries={}, max_daily_loss={:.2}%",
+        "auto-paper worker enabled: strategies={}, interval={}s, max_open_slots={}, max_daily_entries={}, max_daily_loss={:.2}%, allow_multi_strategy_same_signal={}",
         approved_paper_strategy_versions(),
         state.auto_paper.interval_seconds,
         state.auto_paper.max_open_slots,
         state.auto_paper.max_daily_entries,
-        state.auto_paper.max_daily_loss_percent
+        state.auto_paper.max_daily_loss_percent,
+        state.auto_paper.allow_multi_strategy_same_signal
     );
 
     let mut ticker = tokio::time::interval(Duration::from_secs(state.auto_paper.interval_seconds));
@@ -1806,16 +1814,40 @@ async fn run_auto_paper_cycle(state: &AppState) -> Result<(), ApiError> {
 
         persist_signal_evaluations_if_enabled(state, &signals, now);
 
+        let mut ready_signals = Vec::new();
         for signal in signals {
+            if signal.risk_plan.is_some() {
+                ready_signals.push(signal);
+                continue;
+            }
+            if matches!(signal.technical_stage, SignalStage::Ready) {
+                let db = state
+                    .db
+                    .lock()
+                    .map_err(|_| ApiError::internal("Paper database lock is poisoned."))?;
+                let reason = auto_paper_rejection_reason(&signal);
+                insert_auto_paper_decision(&db, &signal, "rejected", Some(&reason), now)?;
+            }
+        }
+
+        let selected_signals =
+            select_auto_paper_signals_for_symbol(&state.auto_paper, ready_signals);
+        for signal in selected_signals.skipped {
+            let db = state
+                .db
+                .lock()
+                .map_err(|_| ApiError::internal("Paper database lock is poisoned."))?;
+            insert_auto_paper_decision(
+                &db,
+                &signal,
+                "conflict_skipped",
+                Some("duplicate_symbol_signal_conflict"),
+                now,
+            )?;
+        }
+
+        for signal in selected_signals.selected {
             let Some(risk_plan) = signal.risk_plan.clone() else {
-                if matches!(signal.technical_stage, SignalStage::Ready) {
-                    let db = state
-                        .db
-                        .lock()
-                        .map_err(|_| ApiError::internal("Paper database lock is poisoned."))?;
-                    let reason = auto_paper_rejection_reason(&signal);
-                    insert_auto_paper_decision(&db, &signal, "rejected", Some(&reason), now)?;
-                }
                 continue;
             };
 
@@ -1829,6 +1861,19 @@ async fn run_auto_paper_cycle(state: &AppState) -> Result<(), ApiError> {
 
                 if auto_paper_caps_blocked(&state.auto_paper, &stats) {
                     return Ok(());
+                }
+
+                if !state.auto_paper.allow_multi_strategy_same_signal
+                    && has_auto_paper_symbol_signal_conflict(&db, &signal)?
+                {
+                    insert_auto_paper_decision(
+                        &db,
+                        &signal,
+                        "conflict_skipped",
+                        Some("duplicate_symbol_signal_conflict"),
+                        now,
+                    )?;
+                    continue;
                 }
 
                 if !insert_auto_paper_entry_attempt(&db, &signal, now)? {
@@ -1943,6 +1988,99 @@ fn load_auto_paper_cycle_stats(
         cash_balance: account.cash_balance,
         fee_bps: account.fee_bps,
     })
+}
+
+struct AutoPaperSignalSelection {
+    selected: Vec<SignalAssistant>,
+    skipped: Vec<SignalAssistant>,
+}
+
+fn auto_paper_conflict_priority(config: &AutoPaperConfig, strategy_version: &str) -> i32 {
+    if config.prefer_secondary_on_score_tie {
+        if strategy_version == SECONDARY_PAPER_STRATEGY_VERSION {
+            2
+        } else if strategy_version == ACTIVE_PAPER_STRATEGY_VERSION {
+            1
+        } else {
+            0
+        }
+    } else if strategy_version == ACTIVE_PAPER_STRATEGY_VERSION {
+        2
+    } else if strategy_version == SECONDARY_PAPER_STRATEGY_VERSION {
+        1
+    } else {
+        0
+    }
+}
+
+fn select_auto_paper_signals_for_symbol(
+    config: &AutoPaperConfig,
+    signals: Vec<SignalAssistant>,
+) -> AutoPaperSignalSelection {
+    if config.allow_multi_strategy_same_signal {
+        return AutoPaperSignalSelection {
+            selected: signals,
+            skipped: Vec::new(),
+        };
+    }
+
+    let mut grouped: HashMap<i64, Vec<SignalAssistant>> = HashMap::new();
+    for signal in signals {
+        grouped
+            .entry(signal.signal_close_time)
+            .or_default()
+            .push(signal);
+    }
+
+    let mut selected = Vec::new();
+    let mut skipped = Vec::new();
+    for (_, mut group) in grouped {
+        group.sort_by(|left, right| {
+            let left_key = (
+                left.ai_score,
+                auto_paper_conflict_priority(config, left.strategy_version),
+            );
+            let right_key = (
+                right.ai_score,
+                auto_paper_conflict_priority(config, right.strategy_version),
+            );
+            right_key.cmp(&left_key)
+        });
+        if !group.is_empty() {
+            selected.push(group.remove(0));
+        }
+        skipped.extend(group);
+    }
+    selected.sort_by(|left, right| {
+        let left_key = (
+            left.signal_close_time,
+            -left.ai_score,
+            -auto_paper_conflict_priority(config, left.strategy_version),
+        );
+        let right_key = (
+            right.signal_close_time,
+            -right.ai_score,
+            -auto_paper_conflict_priority(config, right.strategy_version),
+        );
+        left_key.cmp(&right_key)
+    });
+    AutoPaperSignalSelection { selected, skipped }
+}
+
+fn has_auto_paper_symbol_signal_conflict(
+    connection: &Connection,
+    signal: &SignalAssistant,
+) -> Result<bool, ApiError> {
+    let count: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM auto_paper_decisions
+         WHERE symbol = ?1
+           AND signal_close_time = ?2
+           AND strategy_version != ?3
+           AND decision IN ('entry_attempt', 'entered')",
+        params![&signal.symbol, signal.signal_close_time, signal.strategy_version],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
 }
 
 fn insert_auto_paper_decision(

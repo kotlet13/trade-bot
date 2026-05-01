@@ -176,6 +176,22 @@ STRICT_EXCLUDED_BASES = {
     "TURBO",
     "WIF",
 }
+LIQUID_LARGE_CAP_SYMBOLS = {
+    "BNBUSDT",
+    "SOLUSDT",
+    "XRPUSDT",
+    "ADAUSDT",
+    "LINKUSDT",
+    "AVAXUSDT",
+    "LTCUSDT",
+    "BCHUSDT",
+    "DOTUSDT",
+    "TRXUSDT",
+    "TONUSDT",
+    "SUIUSDT",
+    "AAVEUSDT",
+    "NEARUSDT",
+}
 _ROW_TIME_CACHE: dict[tuple[int, str, int], tuple[int, ...]] = {}
 
 
@@ -218,6 +234,17 @@ class CandidateSpec:
     use_session_filter: bool = True
     use_correlation_filter: bool = True
     params: dict[str, float | int | str | bool] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class FillSettings:
+    enabled: bool = False
+    strict_fills: bool = False
+    entry_slippage_bps: float | None = 0.0
+    stop_slippage_bps: float | None = 0.0
+    tp_slippage_bps: float | None = 0.0
+    liquidity_multiplier: float = 1.0
+    volatility_multiplier: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -892,6 +919,50 @@ def build_candidates() -> list[CandidateSpec]:
     relative_strength_refine_active_rs80 = {
         **relative_strength_continuation_common,
         "min_relative_strength_percentile": 0.80,
+    }
+    relative_strength_refine_rs75 = {
+        **relative_strength_quality_common,
+        "min_relative_strength_percentile": 0.75,
+    }
+    relative_strength_refine_constructive = {
+        **relative_strength_quality_common,
+        "min_relative_strength_percentile": 0.70,
+        "min_btc_return_pct": -1.5,
+        "max_btc_return_pct": 2.5,
+        "min_basket_positive_share_pct": 45.0,
+        "max_basket_positive_share_pct": 80.0,
+        "min_taker_buy_sell_ratio": 1.10,
+        "max_global_account_long_short_ratio": 1.35,
+        "max_top_trader_position_long_short_ratio": 2.00,
+    }
+    regime_abstention_common = {**ai_score_common, "min_ai_score": 7}
+    regime_abstention_btc_band = {
+        **regime_abstention_common,
+        "btc_return_lookback_hours": 24,
+        "min_btc_return_pct": -1.5,
+        "max_btc_return_pct": 3.5,
+    }
+    regime_abstention_breadth_band = {
+        **regime_abstention_common,
+        "basket_breadth_lookback_hours": 24,
+        "min_basket_positive_share_pct": 35.0,
+        "max_basket_positive_share_pct": 80.0,
+    }
+    regime_abstention_funding_not_panic = {
+        **regime_abstention_common,
+        "min_funding_bps": -1.0,
+    }
+    regime_abstention_global_cap = {
+        **regime_abstention_common,
+        "max_global_account_long_short_ratio": 1.35,
+    }
+    regime_abstention_top_position_cap = {
+        **regime_abstention_common,
+        "max_top_trader_position_long_short_ratio": 2.00,
+    }
+    regime_abstention_volatility_block = {
+        **regime_abstention_common,
+        "max_atr_expansion_multiple": 1.50,
     }
 
     return [
@@ -2565,6 +2636,52 @@ def build_candidates() -> list[CandidateSpec]:
             for component in AI_SCORECARD_V2_ABLATION_COMPONENTS
         ],
         CandidateSpec(
+            "ai_score_v2_base_score7_runtime_tp1",
+            "runtime_exit_parity",
+            "v2_reclaim",
+            base,
+            exit_style="runtime_single_tp",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={**ai_score_common, "min_ai_score": 7},
+        ),
+        CandidateSpec(
+            "ai_score_v2_ablate_oi_runtime_tp1",
+            "runtime_exit_parity",
+            "v2_reclaim",
+            base,
+            exit_style="runtime_single_tp",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={**ai_score_common, "min_ai_score": 7, "ablate_ai_components": "oi"},
+        ),
+        *[
+            CandidateSpec(
+                f"regime_abs_{suffix}",
+                "regime_abstention_filters",
+                "v2_reclaim",
+                base,
+                exit_style="time_stop",
+                regime_filter=regime_filter,
+                use_correlation_filter=False,
+                params=params,
+            )
+            for suffix, regime_filter, params in [
+                ("base_btc_band_s7", "active_session", regime_abstention_btc_band),
+                ("oi_btc_band_s7", "active_session", {**regime_abstention_btc_band, "ablate_ai_components": "oi"}),
+                ("base_breadth35_80_s7", "active_session", regime_abstention_breadth_band),
+                ("oi_breadth35_80_s7", "active_session", {**regime_abstention_breadth_band, "ablate_ai_components": "oi"}),
+                ("base_funding_not_panic_s7", "active_session", regime_abstention_funding_not_panic),
+                ("oi_funding_not_panic_s7", "active_session", {**regime_abstention_funding_not_panic, "ablate_ai_components": "oi"}),
+                ("base_global135_s7", "active_session", regime_abstention_global_cap),
+                ("oi_global135_s7", "active_session", {**regime_abstention_global_cap, "ablate_ai_components": "oi"}),
+                ("base_toppos200_s7", "active_session", regime_abstention_top_position_cap),
+                ("oi_toppos200_s7", "active_session", {**regime_abstention_top_position_cap, "ablate_ai_components": "oi"}),
+                ("base_volshock_block_s7", "active_session", regime_abstention_volatility_block),
+                ("oi_london_overlap_s7", "london_or_overlap", {**regime_abstention_common, "ablate_ai_components": "oi"}),
+            ]
+        ],
+        CandidateSpec(
             "memory_v2_base_neutral_s5",
             "market_memory_filters",
             "v2_reclaim",
@@ -2881,6 +2998,16 @@ def build_candidates() -> list[CandidateSpec]:
             params={**relative_strength_refine_rs60, "min_ai_score": 5},
         ),
         CandidateSpec(
+            "rs_refine_htf_quality_s5_rs75",
+            "relative_strength_refinement",
+            "htf_trend_continuation",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={**relative_strength_refine_rs75, "min_ai_score": 5},
+        ),
+        CandidateSpec(
             "rs_refine_htf_quality_s5_breadth40_90",
             "relative_strength_refinement",
             "htf_trend_continuation",
@@ -2969,6 +3096,26 @@ def build_candidates() -> list[CandidateSpec]:
             regime_filter="london_or_overlap",
             use_correlation_filter=False,
             params={**relative_strength_refine_active_rs80, "min_ai_score": 5},
+        ),
+        CandidateSpec(
+            "rs_refine_htf_constructive_g135_top200_s5",
+            "relative_strength_refinement",
+            "htf_trend_continuation",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="active_session",
+            use_correlation_filter=False,
+            params={**relative_strength_refine_constructive, "min_ai_score": 5},
+        ),
+        CandidateSpec(
+            "rs_refine_htf_constructive_overlap_s5",
+            "relative_strength_refinement",
+            "htf_trend_continuation",
+            benchmark,
+            exit_style="time_stop",
+            regime_filter="london_or_overlap",
+            use_correlation_filter=False,
+            params={**relative_strength_refine_constructive, "min_ai_score": 5},
         ),
         CandidateSpec(
             "ai_score_global_base_s6_g120",
@@ -4626,6 +4773,217 @@ def evaluate_candidate_signal(
     raise ValueError(f"Unsupported signal kind for {symbol}: {candidate.signal_kind}")
 
 
+def strict_entry_slippage_bps(symbol: str | None) -> float:
+    if symbol in {"BTCUSDT", "ETHUSDT"}:
+        return 2.0
+    if symbol in LIQUID_LARGE_CAP_SYMBOLS:
+        return 3.0
+    return 5.0
+
+
+def strict_stop_slippage_bps(trigger_slice: list[study.Candle] | None) -> float:
+    base = 5.0
+    if trigger_slice is None or len(trigger_slice) < 120:
+        return base
+    atr_multiple = atr_expansion_multiple(trigger_slice)
+    if atr_multiple is None:
+        return base
+    if atr_multiple >= 1.50:
+        return base * 1.5
+    if atr_multiple >= 1.20:
+        return base * 1.2
+    return base
+
+
+def effective_slippage_bps(
+    fill_settings: FillSettings | None,
+    kind: str,
+    symbol: str | None,
+    trigger_slice: list[study.Candle] | None,
+) -> float:
+    if fill_settings is None or not fill_settings.enabled:
+        return 0.0
+    if kind == "entry":
+        raw = fill_settings.entry_slippage_bps
+        base = strict_entry_slippage_bps(symbol) if raw is None else float(raw)
+    elif kind == "stop":
+        raw = fill_settings.stop_slippage_bps
+        base = strict_stop_slippage_bps(trigger_slice) if raw is None else float(raw)
+    elif kind == "tp":
+        raw = fill_settings.tp_slippage_bps
+        base = 2.0 if raw is None else float(raw)
+    else:
+        raise ValueError(f"Unsupported slippage kind: {kind}")
+    return max(0.0, base * fill_settings.liquidity_multiplier * fill_settings.volatility_multiplier)
+
+
+def adverse_entry_price(entry: float, is_short: bool, bps: float) -> float:
+    factor = bps / 10_000.0
+    return entry * (1.0 - factor if is_short else 1.0 + factor)
+
+
+def adverse_stop_price(stop_loss: float, is_short: bool, bps: float) -> float:
+    factor = bps / 10_000.0
+    return stop_loss * (1.0 + factor if is_short else 1.0 - factor)
+
+
+def conservative_tp_price(target: float, is_short: bool, bps: float) -> float:
+    factor = bps / 10_000.0
+    return target * (1.0 + factor if is_short else 1.0 - factor)
+
+
+def strict_tp_touch_price(target: float, is_short: bool, bps: float, strict_fills: bool) -> float:
+    if not strict_fills:
+        return target
+    factor = bps / 10_000.0
+    return target * (1.0 - factor if is_short else 1.0 + factor)
+
+
+def replay_from_prices(
+    opened_at: int,
+    closed_at: int,
+    outcome: str,
+    bars_held: int,
+    risk_plan: study.RiskPlan,
+    entry_fill: float,
+    exits: list[tuple[float, float]],
+    fee_bps: float,
+) -> study.ReplayTrade:
+    gross_pnl = sum(quantity * (price - entry_fill) for quantity, price in exits)
+    gross_r = gross_pnl / risk_plan.risk_amount if risk_plan.risk_amount > 0.0 else 0.0
+    fees_paid = risk_plan.suggested_quantity * entry_fill * fee_bps / 10_000.0
+    fees_paid += sum(quantity * price * fee_bps / 10_000.0 for quantity, price in exits)
+    net_r = gross_r - fees_paid / risk_plan.risk_amount if risk_plan.risk_amount > 0.0 else gross_r
+    if not math.isfinite(net_r):
+        net_r = gross_r
+    return study.ReplayTrade(
+        opened_at=opened_at,
+        closed_at=closed_at,
+        outcome=outcome,
+        gross_r=gross_r,
+        net_r=net_r,
+        bars_held=bars_held,
+        fees_paid=fees_paid,
+    )
+
+
+def slipped_tp1_be_tp2_trade(
+    opened_at: int,
+    risk_plan: study.RiskPlan,
+    future_candles: list[study.Candle],
+    fee_bps: float,
+    fill_settings: FillSettings,
+    symbol: str | None,
+    trigger_slice: list[study.Candle] | None,
+) -> study.ReplayTrade:
+    if not future_candles:
+        return study.ReplayTrade(opened_at, opened_at, "timeout", 0.0, 0.0, 0, 0.0)
+    entry_bps = effective_slippage_bps(fill_settings, "entry", symbol, trigger_slice)
+    stop_bps = effective_slippage_bps(fill_settings, "stop", symbol, trigger_slice)
+    tp_bps = effective_slippage_bps(fill_settings, "tp", symbol, trigger_slice)
+    entry_fill = adverse_entry_price(risk_plan.entry, False, entry_bps)
+    stop_fill = adverse_stop_price(risk_plan.stop_loss, False, stop_bps)
+    tp1_touch = strict_tp_touch_price(risk_plan.take_profit_1, False, tp_bps, fill_settings.strict_fills)
+    tp2_touch = strict_tp_touch_price(risk_plan.take_profit_2, False, tp_bps, fill_settings.strict_fills)
+    tp1_fill = conservative_tp_price(risk_plan.take_profit_1, False, tp_bps)
+    tp2_fill = conservative_tp_price(risk_plan.take_profit_2, False, tp_bps)
+    tp1_hit_index: int | None = None
+
+    for index, candle in enumerate(future_candles):
+        hit_stop = candle.low <= risk_plan.stop_loss
+        hit_tp1 = candle.high >= tp1_touch
+        closed_at = candle.open_time + study.interval_millis("15m")
+        if hit_stop and hit_tp1:
+            return replay_from_prices(
+                opened_at,
+                closed_at,
+                "stop_loss",
+                index + 1,
+                risk_plan,
+                entry_fill,
+                [(risk_plan.suggested_quantity, stop_fill)],
+                fee_bps,
+            )
+        if hit_stop:
+            return replay_from_prices(
+                opened_at,
+                closed_at,
+                "stop_loss",
+                index + 1,
+                risk_plan,
+                entry_fill,
+                [(risk_plan.suggested_quantity, stop_fill)],
+                fee_bps,
+            )
+        if hit_tp1:
+            tp1_hit_index = index
+            break
+
+    half_quantity = risk_plan.suggested_quantity / 2.0
+    if tp1_hit_index is not None:
+        first_exit = (half_quantity, tp1_fill)
+        for offset, candle in enumerate(future_candles[tp1_hit_index:], start=tp1_hit_index):
+            closed_at = candle.open_time + study.interval_millis("15m")
+            hit_break_even = candle.low <= entry_fill
+            hit_tp2 = candle.high >= tp2_touch
+            if hit_break_even and hit_tp2:
+                return replay_from_prices(
+                    opened_at,
+                    closed_at,
+                    "breakeven",
+                    offset + 1,
+                    risk_plan,
+                    entry_fill,
+                    [first_exit, (half_quantity, entry_fill)],
+                    fee_bps,
+                )
+            if hit_tp2:
+                return replay_from_prices(
+                    opened_at,
+                    closed_at,
+                    "take_profit_2",
+                    offset + 1,
+                    risk_plan,
+                    entry_fill,
+                    [first_exit, (half_quantity, tp2_fill)],
+                    fee_bps,
+                )
+            if hit_break_even:
+                return replay_from_prices(
+                    opened_at,
+                    closed_at,
+                    "breakeven",
+                    offset + 1,
+                    risk_plan,
+                    entry_fill,
+                    [first_exit, (half_quantity, entry_fill)],
+                    fee_bps,
+                )
+        last = future_candles[-1]
+        return replay_from_prices(
+            opened_at,
+            last.open_time + study.interval_millis("15m"),
+            "timeout",
+            len(future_candles),
+            risk_plan,
+            entry_fill,
+            [first_exit, (half_quantity, last.close)],
+            fee_bps,
+        )
+
+    last = future_candles[-1]
+    return replay_from_prices(
+        opened_at,
+        last.open_time + study.interval_millis("15m"),
+        "timeout",
+        len(future_candles),
+        risk_plan,
+        entry_fill,
+        [(risk_plan.suggested_quantity, last.close)],
+        fee_bps,
+    )
+
+
 def full_exit_trade(
     opened_at: int,
     risk_plan: study.RiskPlan,
@@ -4634,8 +4992,13 @@ def full_exit_trade(
     target_multiple: float,
     max_bars: int | None = None,
     trail_atr: float | None = None,
+    fill_settings: FillSettings | None = None,
+    symbol: str | None = None,
+    trigger_slice: list[study.Candle] | None = None,
 ) -> study.ReplayTrade:
     candles = future_candles[:max_bars] if max_bars is not None else future_candles
+    if not candles:
+        return study.ReplayTrade(opened_at, opened_at, "timeout", 0.0, 0.0, 0, 0.0)
     closed_at = opened_at
     outcome = "timeout"
     exit_price = risk_plan.entry
@@ -4643,18 +5006,31 @@ def full_exit_trade(
     stop_loss = risk_plan.stop_loss
     target = risk_plan.entry + risk_plan.risk_per_unit * target_multiple
     highest_high = risk_plan.entry
+    entry_fill = risk_plan.entry
+    stop_bps = 0.0
+    tp_bps = 0.0
+    target_touch = target
+    if fill_settings is not None and fill_settings.enabled:
+        entry_fill = adverse_entry_price(
+            risk_plan.entry,
+            False,
+            effective_slippage_bps(fill_settings, "entry", symbol, trigger_slice),
+        )
+        stop_bps = effective_slippage_bps(fill_settings, "stop", symbol, trigger_slice)
+        tp_bps = effective_slippage_bps(fill_settings, "tp", symbol, trigger_slice)
+        target_touch = strict_tp_touch_price(target, False, tp_bps, fill_settings.strict_fills)
 
     for index, candle in enumerate(candles):
         if candle.low <= stop_loss:
             closed_at = candle.open_time + study.interval_millis("15m")
             outcome = "stop_loss" if stop_loss <= risk_plan.entry else "trail_stop"
-            exit_price = stop_loss
+            exit_price = adverse_stop_price(stop_loss, False, stop_bps)
             bars_held = index + 1
             break
-        if candle.high >= target:
+        if candle.high >= target_touch:
             closed_at = candle.open_time + study.interval_millis("15m")
             outcome = "take_profit_2"
-            exit_price = target
+            exit_price = conservative_tp_price(target, False, tp_bps)
             bars_held = index + 1
             break
         if trail_atr is not None:
@@ -4666,9 +5042,9 @@ def full_exit_trade(
             closed_at = last.open_time + study.interval_millis("15m")
             exit_price = last.close
 
-    gross_r = (exit_price - risk_plan.entry) / risk_plan.risk_per_unit
+    gross_r = (exit_price - entry_fill) / risk_plan.risk_per_unit
     fees_paid = (
-        risk_plan.notional_estimate * fee_bps / 10_000.0
+        risk_plan.suggested_quantity * entry_fill * fee_bps / 10_000.0
         + risk_plan.suggested_quantity * exit_price * fee_bps / 10_000.0
     )
     net_r = gross_r - fees_paid / risk_plan.risk_amount
@@ -4690,33 +5066,51 @@ def short_full_exit_trade(
     fee_bps: float,
     target_multiple: float,
     max_bars: int | None = None,
+    fill_settings: FillSettings | None = None,
+    symbol: str | None = None,
+    trigger_slice: list[study.Candle] | None = None,
 ) -> study.ReplayTrade:
     candles = future_candles[:max_bars] if max_bars is not None else future_candles
+    if not candles:
+        return study.ReplayTrade(opened_at, opened_at, "timeout", 0.0, 0.0, 0, 0.0)
     closed_at = opened_at
     outcome = "timeout"
     exit_price = risk_plan.entry
     bars_held = len(candles)
     target = risk_plan.entry - risk_plan.risk_per_unit * target_multiple
+    entry_fill = risk_plan.entry
+    stop_bps = 0.0
+    tp_bps = 0.0
+    target_touch = target
+    if fill_settings is not None and fill_settings.enabled:
+        entry_fill = adverse_entry_price(
+            risk_plan.entry,
+            True,
+            effective_slippage_bps(fill_settings, "entry", symbol, trigger_slice),
+        )
+        stop_bps = effective_slippage_bps(fill_settings, "stop", symbol, trigger_slice)
+        tp_bps = effective_slippage_bps(fill_settings, "tp", symbol, trigger_slice)
+        target_touch = strict_tp_touch_price(target, True, tp_bps, fill_settings.strict_fills)
 
     for index, candle in enumerate(candles):
         hit_stop = candle.high >= risk_plan.stop_loss
-        hit_target = candle.low <= target
+        hit_target = candle.low <= target_touch
         if hit_stop and hit_target:
             closed_at = candle.open_time + study.interval_millis("15m")
             outcome = "stop_loss"
-            exit_price = risk_plan.stop_loss
+            exit_price = adverse_stop_price(risk_plan.stop_loss, True, stop_bps)
             bars_held = index + 1
             break
         if hit_stop:
             closed_at = candle.open_time + study.interval_millis("15m")
             outcome = "stop_loss"
-            exit_price = risk_plan.stop_loss
+            exit_price = adverse_stop_price(risk_plan.stop_loss, True, stop_bps)
             bars_held = index + 1
             break
         if hit_target:
             closed_at = candle.open_time + study.interval_millis("15m")
             outcome = "take_profit_2"
-            exit_price = target
+            exit_price = conservative_tp_price(target, True, tp_bps)
             bars_held = index + 1
             break
     else:
@@ -4725,9 +5119,9 @@ def short_full_exit_trade(
             closed_at = last.open_time + study.interval_millis("15m")
             exit_price = last.close
 
-    gross_r = (risk_plan.entry - exit_price) / risk_plan.risk_per_unit
+    gross_r = (entry_fill - exit_price) / risk_plan.risk_per_unit
     fees_paid = (
-        risk_plan.notional_estimate * fee_bps / 10_000.0
+        risk_plan.suggested_quantity * entry_fill * fee_bps / 10_000.0
         + risk_plan.suggested_quantity * exit_price * fee_bps / 10_000.0
     )
     net_r = gross_r - fees_paid / risk_plan.risk_amount
@@ -4834,8 +5228,20 @@ def simulate_candidate_trade(
     future_candles: list[study.Candle],
     fee_bps: float,
     trigger_slice: list[study.Candle],
+    fill_settings: FillSettings | None = None,
+    symbol: str | None = None,
 ) -> study.ReplayTrade:
     if candidate.exit_style == "tp1_be_tp2":
+        if fill_settings is not None and fill_settings.enabled:
+            return slipped_tp1_be_tp2_trade(
+                opened_at,
+                risk_plan,
+                future_candles,
+                fee_bps,
+                fill_settings,
+                symbol,
+                trigger_slice,
+            )
         return study.simulate_trade(opened_at, risk_plan, future_candles, fee_bps)
     if candidate.exit_style == "partial_no_be":
         return partial_no_be_trade(opened_at, risk_plan, future_candles, fee_bps)
@@ -4847,6 +5253,9 @@ def simulate_candidate_trade(
             fee_bps,
             target_multiple=float(candidate.params.get("target_multiple", 1.5)),
             max_bars=int(candidate.params.get("max_bars", 16)),
+            fill_settings=fill_settings,
+            symbol=symbol,
+            trigger_slice=trigger_slice,
         )
     if candidate.exit_style == "short_time_stop":
         return short_full_exit_trade(
@@ -4856,6 +5265,21 @@ def simulate_candidate_trade(
             fee_bps,
             target_multiple=float(candidate.params.get("target_multiple", 1.5)),
             max_bars=int(candidate.params.get("max_bars", 16)),
+            fill_settings=fill_settings,
+            symbol=symbol,
+            trigger_slice=trigger_slice,
+        )
+    if candidate.exit_style == "runtime_single_tp":
+        return full_exit_trade(
+            opened_at,
+            risk_plan,
+            future_candles,
+            fee_bps,
+            target_multiple=1.0,
+            max_bars=None,
+            fill_settings=fill_settings,
+            symbol=symbol,
+            trigger_slice=trigger_slice,
         )
     if candidate.exit_style == "atr_trail":
         atr_15m = study.calculate_atr(trigger_slice, 14)
@@ -4869,6 +5293,9 @@ def simulate_candidate_trade(
             fee_bps,
             target_multiple=2.0,
             trail_atr=trail_atr,
+            fill_settings=fill_settings,
+            symbol=symbol,
+            trigger_slice=trigger_slice,
         )
     raise ValueError(f"Unsupported exit style: {candidate.exit_style}")
 
@@ -4881,6 +5308,7 @@ def collect_candidate_trades(
     split: SplitSpec,
     forward_candles: int,
     fee_bps: float,
+    fill_settings: FillSettings | None = None,
 ) -> list[TradeRecord]:
     records: list[TradeRecord] = []
     btc_data = market_data[study.BTC_REFERENCE_SYMBOL]
@@ -4952,6 +5380,8 @@ def collect_candidate_trades(
             future,
             fee_bps,
             trigger_slice,
+            fill_settings,
+            symbol,
         )
         records.append(
             TradeRecord(
@@ -5105,6 +5535,7 @@ def evaluate_candidate(
     forward_candles: int,
     fee_bps: float,
     full_walk_forward: bool,
+    fill_settings: FillSettings | None = None,
 ) -> dict[str, Any]:
     records: list[TradeRecord] = []
     for split in splits:
@@ -5118,6 +5549,7 @@ def evaluate_candidate(
                     split,
                     forward_candles,
                     fee_bps,
+                    fill_settings,
                 )
             )
 
@@ -5157,7 +5589,7 @@ def evaluate_candidate(
     }
 
 
-def evaluate_candidate_job(args: tuple[CandidateSpec, list[str], dict[str, MarketData], list[SplitSpec], int, float, bool]) -> dict[str, Any]:
+def evaluate_candidate_job(args: tuple[CandidateSpec, list[str], dict[str, MarketData], list[SplitSpec], int, float, bool, FillSettings | None]) -> dict[str, Any]:
     return evaluate_candidate(*args)
 
 
@@ -5305,6 +5737,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--trigger-limit", type=int, default=DEFAULT_TRIGGER_LIMIT)
     parser.add_argument("--forward-candles", type=int, default=DEFAULT_FORWARD_CANDLES)
     parser.add_argument("--fee-bps", type=float, default=study.DEFAULT_FEE_BPS)
+    parser.add_argument("--entry-slippage-bps", type=float, default=None)
+    parser.add_argument("--stop-slippage-bps", type=float, default=None)
+    parser.add_argument("--tp-slippage-bps", type=float, default=None)
+    parser.add_argument("--strict-fills", action="store_true", help="Use conservative research-only fill/slippage assumptions.")
+    parser.add_argument("--no-slippage", action="store_true", help="Disable fill slippage and preserve legacy fill behavior.")
     parser.add_argument("--cache-dir", type=Path, default=Path("tmp/research_cache"))
     parser.add_argument("--derivatives-cache-dir", type=Path, default=Path("tmp/derivatives_cache"))
     parser.add_argument("--output-dir", type=Path, default=Path("tmp/research_runs"))
@@ -5373,6 +5810,19 @@ def main() -> int:
         return 2
     include_funding = candidates_need_funding(candidates)
     include_metrics = candidates_need_metrics(candidates)
+    slippage_enabled = not args.no_slippage and (
+        args.strict_fills
+        or args.entry_slippage_bps is not None
+        or args.stop_slippage_bps is not None
+        or args.tp_slippage_bps is not None
+    )
+    fill_settings = FillSettings(
+        enabled=slippage_enabled,
+        strict_fills=bool(args.strict_fills),
+        entry_slippage_bps=args.entry_slippage_bps if args.entry_slippage_bps is not None else (None if args.strict_fills else 0.0),
+        stop_slippage_bps=args.stop_slippage_bps if args.stop_slippage_bps is not None else (None if args.strict_fills else 0.0),
+        tp_slippage_bps=args.tp_slippage_bps if args.tp_slippage_bps is not None else (None if args.strict_fills else 0.0),
+    )
 
     full_walk_forward = args.trigger_limit >= RESEARCH_CANDLES + HOLDOUT_CANDLES
     splits = build_splits(args.trigger_limit, args.forward_candles)
@@ -5415,6 +5865,7 @@ def main() -> int:
             args.forward_candles,
             args.fee_bps,
             full_walk_forward,
+            fill_settings,
         )
         for candidate in candidates
     ]
@@ -5442,6 +5893,7 @@ def main() -> int:
             "trigger_limit": args.trigger_limit,
             "forward_candles": args.forward_candles,
             "fee_bps": args.fee_bps,
+            "fill_settings": asdict(fill_settings),
             "universe_limit": args.universe_limit,
             "universe_profile": args.universe_profile,
             "min_quote_volume": args.min_quote_volume,

@@ -10,10 +10,10 @@ The project is not approved for live trading. Do not add live-funds execution or
 
 - Mode: approved gated paper testing plus ongoing research.
 - Live funds: disabled / out of scope.
-- Paper trading: enabled for primary `ai_score_v2_base_score7` and secondary `ai_score_v2_ablate_oi`; auto-paper can be enabled only for local paper ledger entries with the documented guardrails.
+- Paper trading: approved for primary `ai_score_v2_base_score7` and secondary `ai_score_v2_ablate_oi`; auto-paper is disabled by default in Compose and can be enabled only for local paper ledger entries with the documented guardrails.
 - Latest completed focused full walk-forward run: `tmp/research_runs/ai_scorecard_v2_ablate_oi_confirm_universe30_20260428.json`.
 - Latest focused full run result: `ai_score_v2_ablate_oi` confirmed its harness promotion-gate pass after the full ablation run.
-- Runtime status: `ai_score_v2_base_score7` and `ai_score_v2_ablate_oi` are wired into live `SignalAssistant` as gated paper strategies. Auto-paper uses one global slot, idempotency by `strategy + symbol + signal_close_time`, daily caps, and local SQLite paper fills only.
+- Runtime status: `ai_score_v2_base_score7` and `ai_score_v2_ablate_oi` are wired into live `SignalAssistant` as gated paper strategies. Auto-paper uses one global slot, idempotency by `strategy + symbol + signal_close_time`, duplicate same-symbol/same-signal conflict blocking across strategies, daily caps, and local SQLite paper fills only.
 - Previous best non-passing candidate: `v2_reclaim_overlap_only`, from `tmp/research_runs/research_run_20260426_150229.json`.
 - Bot service may be running on `http://localhost:8081`; verify with `/health`.
 
@@ -50,6 +50,12 @@ python -m py_compile scripts\strategy_study.py scripts\research_harness.py scrip
 python scripts\test_research_harness.py
 python scripts\test_predictive_meta_model.py
 cargo check
+```
+
+Daily read-only diagnostics:
+
+```powershell
+python scripts\daily_paper_diagnostics.py
 ```
 
 Run fast smoke research:
@@ -130,5 +136,6 @@ Next research step:
 - Keep paper-testing `ai_score_v2_base_score7` and `ai_score_v2_ablate_oi` in guarded mode and journal every accepted/rejected signal.
 - Add forward-paper diagnostics comparing runtime scorecard decisions against the harness assumptions.
 - Run parity for both runtime strategies and monitor whether the OI-ablation secondary bot improves forward paper quality.
+- Use `regime_abstention_filters`, `runtime_exit_parity`, and `relative_strength_refinement` as harness-only research families; do not wire them into runtime without normal promotion gates and explicit approval.
 - Broaden event-level predictive modeling only as research diagnostics; do not promote a model unless it passes the normal gates.
 - Continue bounded candidate batches around derivatives data freshness, slippage/fill realism, session sensitivity, and scorecard ablations.

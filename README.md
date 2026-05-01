@@ -55,8 +55,9 @@ Compose zazene tudi `news-events` research sidecar. Ta vsakih 15 minut osvezi pu
   - recent replay primeri z outcome in trajanje setupa
 - rocni `market` in `limit` paper orderji
 - stop-loss in take-profit na long paper entryjih
-- guarded auto-paper worker: ena globalna auto pozicija naenkrat, najvec 3 auto entryji na UTC dan, 2% dnevni realized-loss kill switch
+- guarded auto-paper worker: privzeto izklopljen, ena globalna auto pozicija naenkrat, najvec 3 auto entryji na UTC dan, 2% dnevni realized-loss kill switch
     - oba paper bota uporabljata isti lokalni SQLite paper executor in isti globalni slot
+    - duplicate same-symbol/same-signal entries across primary and secondary are blocked unless explicitly enabled
 - virtualni cash, pozicije, odprti orderji in PnL
 - trade log z notes in lokalno persistenco v SQLite
 - runtime telemetry archive v SQLite: recent tickerji, `1m/15m/1h/4h` svecke, USD-M funding, futures positioning metric rows, in `SignalAssistant` scorecard snapshots
@@ -69,7 +70,7 @@ Compose zazene tudi `news-events` research sidecar. Ta vsakih 15 minut osvezi pu
 - testnet integracija
 - vec-uporabniski access model
 - partner-level capital ledger v sami aplikaciji
-- auto execution iz signal assistant modula
+- live/testnet auto execution iz signal assistant modula
 - robusten event-driven backtest engine z exchange fill modelom
 - zgodovinski `news` replay ali economic-calendar feed z event revision logiko
 
@@ -97,9 +98,10 @@ Okoljske spremenljivke:
 - `STARTING_CASH=10000`
 - `PAPER_FEE_BPS=10`
 - `DEFAULT_INTERVAL=1m`
-- `AUTO_PAPER_TRADING=true`
+- `AUTO_PAPER_TRADING=false` by default in Compose; set `true` only when intentionally enabling guarded local paper entries
 - `AUTO_PAPER_INTERVAL_SECONDS=60`
 - `AUTO_PAPER_MAX_OPEN_SLOTS=1`
+- `AUTO_PAPER_ALLOW_MULTI_STRATEGY_SAME_SIGNAL=false`
 - `AUTO_PAPER_MAX_DAILY_ENTRIES=3`
 - `AUTO_PAPER_MAX_DAILY_LOSS_PERCENT=2`
 - `RUNTIME_TELEMETRY_ENABLED=true`
@@ -119,6 +121,14 @@ Forward paper report:
 ```bash
 python scripts/forward_paper_report.py --markdown-out tmp/forward_paper_report_latest.md --json-out tmp/forward_paper_report_latest.json
 ```
+
+Daily paper diagnostics:
+
+```bash
+python scripts/daily_paper_diagnostics.py
+```
+
+This orchestrates the forward paper report, runtime telemetry report, runtime/harness parity for both active strategies, and the optional market-memory report when the DB has the required telemetry. It is read-only and does not call `/api/paper/*`.
 
 Runtime telemetry report:
 
@@ -152,11 +162,28 @@ python scripts/research_harness.py --candidate-family market_memory_filters --tr
 
 The `market_memory_filters` family is harness-only. It converts the diagnostic market-memory layer into bounded candidates around BTC 24h regime, London/New York sessions, basket breadth, derivatives positioning, funding/taker pressure, and scorecard/OI-ablation variants. It does not change active paper strategies.
 
+Regime-abstention and relative-strength research:
+
+```bash
+python scripts/research_harness.py --candidate-family regime_abstention_filters --trigger-limit 12000 --universe-limit 30 --workers 2 --json-out tmp/research_runs/regime_abstention_filters_universe30_latest.json
+python scripts/research_harness.py --candidate-family relative_strength_refinement --trigger-limit 12000 --universe-limit 30 --workers 2 --json-out tmp/research_runs/relative_strength_refinement_universe30_latest.json
+```
+
+These families are harness-only. Backtests are hypothesis filters, not proof. Forward-paper results are the main evidence before any testnet discussion, and no strategy promotion is allowed without promotion gates plus explicit user approval.
+
+Strict fill research mode:
+
+```bash
+python scripts/research_harness.py --smoke --strict-fills --candidate-family runtime_exit_parity --workers 2 --json-out tmp/research_runs/smoke_runtime_exit_strict_fills.json
+```
+
+`--strict-fills` adds conservative research-only entry, stop, and take-profit slippage/touch assumptions. `--no-slippage` preserves legacy fill behavior.
+
 Runtime/harness parity check:
 
 ```bash
-python scripts/runtime_harness_parity.py --symbols ETHUSDT,SOLUSDT --markdown-out tmp/runtime_harness_parity_latest.md --json-out tmp/runtime_harness_parity_latest.json
-python scripts/runtime_harness_parity.py --strategy ai_score_v2_ablate_oi --symbols ETHUSDT,SOLUSDT --markdown-out tmp/runtime_harness_parity_oi_latest.md --json-out tmp/runtime_harness_parity_oi_latest.json
+python scripts/runtime_harness_parity.py --strategy ai_score_v2_base_score7 --symbols ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT --markdown-out tmp/runtime_harness_parity_base_latest.md --json-out tmp/runtime_harness_parity_base_latest.json
+python scripts/runtime_harness_parity.py --strategy ai_score_v2_ablate_oi --symbols ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT --markdown-out tmp/runtime_harness_parity_oi_latest.md --json-out tmp/runtime_harness_parity_oi_latest.json
 ```
 
 Scorecard ablation research:

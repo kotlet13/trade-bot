@@ -104,7 +104,9 @@ def main() -> int:
         assert summary["decision_counts"]["rejected"] == 1
         assert summary["completed_trades"] == 1
         assert abs(summary["realized_r"] - 0.979) < 1e-9
-        assert "Score funding, AI score v2" in summary["rejection_blockers"]
+        assert summary["rejection_blockers"]["Score funding"] == 1
+        assert summary["rejection_blockers"]["AI score v2"] == 1
+        assert summary["grouped_stats"]["by_strategy"]["ai_score_v2_base_score7"]["count"] == 1
         markdown = report.render_markdown(summary, decisions)
         assert "Forward Paper Report" in markdown
         assert "ETHUSDT" in markdown

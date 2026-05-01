@@ -7,7 +7,7 @@ import sys
 import time
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -43,6 +43,7 @@ class ParityRow:
     generated_at: int
     status: str
     notes: list[str]
+    mismatch_reasons: list[str] = field(default_factory=list)
 
 
 def json_get_url(url: str, timeout: int = 30) -> Any:
@@ -218,6 +219,8 @@ def python_signal(
 
     risk_plan = evaluation.risk_plan
     ai_score = 0
+    funding_missing = False
+    metrics_missing = False
     if risk_plan is not None:
         btc_trend = trend if symbol == study.BTC_REFERENCE_SYMBOL else closed(
             study.fetch_klines(study.BTC_REFERENCE_SYMBOL, "4h", 160),
@@ -226,6 +229,8 @@ def python_signal(
         )
         funding_rows = [] if symbol == study.BTC_REFERENCE_SYMBOL else latest_funding_rows(symbol, signal_close_time)
         metric_rows = [] if symbol == study.BTC_REFERENCE_SYMBOL else build_live_metric_rows(symbol, signal_close_time)
+        funding_missing = symbol != study.BTC_REFERENCE_SYMBOL and not funding_rows
+        metrics_missing = symbol != study.BTC_REFERENCE_SYMBOL and not metric_rows
         market_symbols = [item for item in dashboard["watchlist"] if isinstance(item, str)]
         market_data = build_market_data(market_symbols, signal_close_time, symbol, trigger)
         ai_score, _ = harness.ai_scorecard_v2(
@@ -251,7 +256,28 @@ def python_signal(
         "risk_plan": python_risk_plan,
         "signal_close_time": signal_close_time,
         "generated_at": generated_at,
+        "funding_missing": funding_missing,
+        "metrics_missing": metrics_missing,
     }
+
+
+def runtime_check_failed(runtime: dict[str, Any], label: str, contains: str | None = None) -> bool:
+    for check in runtime.get("checklist") or []:
+        if not isinstance(check, dict):
+            continue
+        if str(check.get("label") or "") != label:
+            continue
+        if bool(check.get("passed")):
+            return False
+        if contains is None:
+            return True
+        return contains.lower() in str(check.get("detail") or "").lower()
+    return False
+
+
+def append_note(notes: list[str], reasons: list[str], reason: str, detail: str) -> None:
+    reasons.append(reason)
+    notes.append(f"{reason}: {detail}")
 
 
 def compare_symbol(base_url: str, symbol: str, candidate: harness.CandidateSpec) -> ParityRow:
@@ -268,15 +294,51 @@ def compare_symbol(base_url: str, symbol: str, candidate: harness.CandidateSpec)
     python_ai_score = int(py["ai_score"])
     runtime_risk_plan = bool(runtime.get("risk_plan"))
     python_risk_plan = bool(py["risk_plan"])
+    mismatch_reasons: list[str] = []
 
     if runtime_technical_stage != python_technical_stage:
-        notes.append(f"technical_stage runtime={runtime_technical_stage} python={python_technical_stage}")
+        append_note(
+            notes,
+            mismatch_reasons,
+            "technical_stage_mismatch",
+            f"runtime={runtime_technical_stage} python={python_technical_stage}",
+        )
     if abs(runtime_ai_score - python_ai_score) > SCORE_TOLERANCE:
-        notes.append(f"ai_score runtime={runtime_ai_score} python={python_ai_score}")
+        append_note(
+            notes,
+            mismatch_reasons,
+            "ai_score_mismatch",
+            f"runtime={runtime_ai_score} python={python_ai_score}",
+        )
     if runtime_risk_plan != python_risk_plan:
-        notes.append("risk_plan mismatch; runtime may include news gate that Python parity does not model")
+        detail = f"runtime={runtime_risk_plan} python={python_risk_plan}"
+        if runtime_check_failed(runtime, "News filter"):
+            append_note(notes, mismatch_reasons, "news_gate_mismatch", detail)
+        else:
+            append_note(notes, mismatch_reasons, "risk_plan_mismatch", detail)
     if int(runtime.get("signal_close_time") or 0) != int(py["signal_close_time"]):
-        notes.append("signal_close_time mismatch")
+        append_note(
+            notes,
+            mismatch_reasons,
+            "signal_close_time_mismatch",
+            f"runtime={runtime.get('signal_close_time')} python={py['signal_close_time']}",
+        )
+    runtime_funding_missing = runtime_check_failed(runtime, "Score funding", "missing")
+    runtime_metrics_missing = runtime_check_failed(runtime, "Score futures metrics", "missing")
+    if runtime_funding_missing != bool(py.get("funding_missing")):
+        append_note(
+            notes,
+            mismatch_reasons,
+            "missing_funding_data_mismatch",
+            f"runtime={runtime_funding_missing} python={py.get('funding_missing')}",
+        )
+    if runtime_metrics_missing != bool(py.get("metrics_missing")):
+        append_note(
+            notes,
+            mismatch_reasons,
+            "missing_futures_data_mismatch",
+            f"runtime={runtime_metrics_missing} python={py.get('metrics_missing')}",
+        )
 
     status = "pass" if not notes else "warn"
     return ParityRow(
@@ -293,6 +355,7 @@ def compare_symbol(base_url: str, symbol: str, candidate: harness.CandidateSpec)
         generated_at=int(runtime.get("generated_at") or py["generated_at"]),
         status=status,
         notes=notes,
+        mismatch_reasons=mismatch_reasons,
     )
 
 
@@ -311,14 +374,15 @@ def render_markdown(rows: list[ParityRow], strategy: str = DEFAULT_STRATEGY) -> 
         f"- Passing: `{passed}`",
         f"- Warnings: `{len(rows) - passed}`",
         "",
-        "| Symbol | Status | Runtime technical | Python technical | Runtime score | Python score | Runtime risk | Python risk | Notes |",
-        "| --- | --- | --- | --- | ---: | ---: | --- | --- | --- |",
+        "| Symbol | Status | Runtime technical | Python technical | Runtime score | Python score | Runtime risk | Python risk | Reasons | Notes |",
+        "| --- | --- | --- | --- | ---: | ---: | --- | --- | --- | --- |",
     ]
     for row in rows:
         notes = "<br>".join(row.notes) if row.notes else ""
+        reasons = ", ".join(row.mismatch_reasons) if row.mismatch_reasons else ""
         lines.append(
             f"| `{row.symbol}` | `{row.status}` | `{row.runtime_technical_stage}` | `{row.python_technical_stage}` "
-            f"| `{row.runtime_ai_score}` | `{row.python_ai_score}` | `{row.runtime_risk_plan}` | `{row.python_risk_plan}` | {notes} |"
+            f"| `{row.runtime_ai_score}` | `{row.python_ai_score}` | `{row.runtime_risk_plan}` | `{row.python_risk_plan}` | {reasons} | {notes} |"
         )
     return "\n".join(lines) + "\n"
 
@@ -341,7 +405,29 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     candidate = candidate_by_name(args.strategy)
-    rows = [compare_symbol(args.base_url, symbol, candidate) for symbol in parse_symbols(args.symbols)]
+    rows: list[ParityRow] = []
+    for symbol in parse_symbols(args.symbols):
+        try:
+            rows.append(compare_symbol(args.base_url, symbol, candidate))
+        except Exception as error:
+            rows.append(
+                ParityRow(
+                    symbol=symbol,
+                    runtime_stage="error",
+                    python_stage="error",
+                    runtime_technical_stage="error",
+                    python_technical_stage="error",
+                    runtime_ai_score=0,
+                    python_ai_score=0,
+                    runtime_risk_plan=False,
+                    python_risk_plan=False,
+                    signal_close_time=0,
+                    generated_at=int(time.time() * 1000),
+                    status="warn",
+                    notes=[f"parity_error: {error}"],
+                    mismatch_reasons=["parity_error"],
+                )
+            )
     payload = {
         "generated_at": int(time.time() * 1000),
         "strategy": args.strategy,

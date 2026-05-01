@@ -94,6 +94,93 @@ class ResearchHarnessFixtures(unittest.TestCase):
         self.assertEqual(trade.outcome, "take_profit_2")
         self.assertLess(trade.net_r, trade.gross_r)
 
+    def test_strict_fill_slippage_reduces_net_r(self) -> None:
+        candidate = harness.CandidateSpec(
+            "slippage_fixture",
+            "test",
+            "v2_reclaim",
+            study.StrategyConfig("test"),
+            exit_style="runtime_single_tp",
+        )
+        candles = [study.Candle(0, 100.0, 111.0, 99.0, 110.0, 1.0)]
+        legacy = harness.simulate_candidate_trade(candidate, 0, self.make_risk_plan(), candles, 10.0, candles)
+        strict = harness.simulate_candidate_trade(
+            candidate,
+            0,
+            self.make_risk_plan(),
+            candles,
+            10.0,
+            candles,
+            harness.FillSettings(enabled=True, strict_fills=True, entry_slippage_bps=5.0, stop_slippage_bps=5.0, tp_slippage_bps=5.0),
+            "ETHUSDT",
+        )
+        self.assertLess(strict.net_r, legacy.net_r)
+
+    def test_strict_take_profit_fill_requires_clearance(self) -> None:
+        candidate = harness.CandidateSpec(
+            "strict_tp_fixture",
+            "test",
+            "v2_reclaim",
+            study.StrategyConfig("test"),
+            exit_style="runtime_single_tp",
+        )
+        candles = [study.Candle(0, 100.0, 110.0, 99.0, 109.0, 1.0)]
+        trade = harness.simulate_candidate_trade(
+            candidate,
+            0,
+            self.make_risk_plan(),
+            candles,
+            10.0,
+            candles,
+            harness.FillSettings(enabled=True, strict_fills=True, entry_slippage_bps=0.0, stop_slippage_bps=0.0, tp_slippage_bps=10.0),
+            "ETHUSDT",
+        )
+        self.assertEqual(trade.outcome, "timeout")
+
+    def test_stop_slippage_worsens_stop_loss_trade(self) -> None:
+        candidate = harness.CandidateSpec(
+            "stop_slip_fixture",
+            "test",
+            "v2_reclaim",
+            study.StrategyConfig("test"),
+            exit_style="runtime_single_tp",
+        )
+        candles = [study.Candle(0, 100.0, 101.0, 89.0, 90.0, 1.0)]
+        legacy = harness.simulate_candidate_trade(candidate, 0, self.make_risk_plan(), candles, 10.0, candles)
+        slipped = harness.simulate_candidate_trade(
+            candidate,
+            0,
+            self.make_risk_plan(),
+            candles,
+            10.0,
+            candles,
+            harness.FillSettings(enabled=True, strict_fills=True, entry_slippage_bps=0.0, stop_slippage_bps=10.0, tp_slippage_bps=0.0),
+            "ETHUSDT",
+        )
+        self.assertEqual(slipped.outcome, "stop_loss")
+        self.assertLess(slipped.net_r, legacy.net_r)
+
+    def test_same_candle_stop_tp_with_slippage_remains_conservative(self) -> None:
+        candidate = harness.CandidateSpec(
+            "same_candle_slip_fixture",
+            "test",
+            "v2_reclaim",
+            study.StrategyConfig("test"),
+            exit_style="tp1_be_tp2",
+        )
+        candles = [study.Candle(0, 100.0, 112.0, 89.0, 105.0, 1.0)]
+        trade = harness.simulate_candidate_trade(
+            candidate,
+            0,
+            self.make_risk_plan(),
+            candles,
+            10.0,
+            candles,
+            harness.FillSettings(enabled=True, strict_fills=True, entry_slippage_bps=5.0, stop_slippage_bps=5.0, tp_slippage_bps=5.0),
+            "ETHUSDT",
+        )
+        self.assertEqual(trade.outcome, "stop_loss")
+
     def test_short_time_stop_handles_short_profit(self) -> None:
         trade = harness.short_full_exit_trade(
             opened_at=0,
@@ -829,13 +916,33 @@ class ResearchHarnessFixtures(unittest.TestCase):
             candidate for candidate in harness.build_candidates() if candidate.family == "relative_strength_refinement"
         ]
         names = {candidate.name for candidate in focused}
-        self.assertEqual(len(focused), 14)
+        self.assertEqual(len(focused), 17)
         self.assertIn("rs_refine_htf_quality_s5_control", names)
         self.assertIn("rs_refine_htf_quality_s6_control", names)
         self.assertIn("rs_refine_htf_quality_s5_rs65", names)
+        self.assertIn("rs_refine_htf_quality_s5_rs75", names)
         self.assertIn("rs_refine_htf_position_loose_s5", names)
         self.assertIn("rs_refine_htf_quality_s5_oi_max2", names)
         self.assertIn("rs_refine_htf_overlap_rs80", names)
+        self.assertIn("rs_refine_htf_constructive_g135_top200_s5", names)
+
+    def test_regime_abstention_filter_candidates_are_available(self) -> None:
+        focused = [
+            candidate for candidate in harness.build_candidates() if candidate.family == "regime_abstention_filters"
+        ]
+        names = {candidate.name for candidate in focused}
+        self.assertEqual(len(focused), 12)
+        self.assertIn("regime_abs_base_btc_band_s7", names)
+        self.assertIn("regime_abs_oi_global135_s7", names)
+        self.assertIn("regime_abs_base_volshock_block_s7", names)
+        self.assertIn("regime_abs_oi_london_overlap_s7", names)
+
+    def test_runtime_exit_parity_candidates_are_available(self) -> None:
+        focused = [candidate for candidate in harness.build_candidates() if candidate.family == "runtime_exit_parity"]
+        names = {candidate.name for candidate in focused}
+        self.assertEqual(len(focused), 2)
+        self.assertIn("ai_score_v2_base_score7_runtime_tp1", names)
+        self.assertIn("ai_score_v2_ablate_oi_runtime_tp1", names)
 
     def test_ai_scorecard_ablation_removes_only_selected_component(self) -> None:
         signal_time, funding_rows, metric_rows = self.make_scorecard_context()
