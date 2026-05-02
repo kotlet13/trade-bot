@@ -18,6 +18,16 @@ TRIGGER_INTERVAL_MS = 15 * 60 * 1000
 
 
 @dataclass(frozen=True)
+class CampaignThresholds:
+    min_observation_trades: int = 30
+    min_serious_sample_trades: int = 60
+    promotion_like_sample_trades: int = 80
+    max_forward_drawdown_r: float = 5.0
+    min_forward_avg_r: float = 0.05
+    min_forward_profit_factor: float = 1.15
+
+
+@dataclass(frozen=True)
 class TradePair:
     strategy_version: str
     symbol: str
@@ -533,6 +543,8 @@ def completed_trade_stats(pairs: list[TradePair]) -> dict[str, Any]:
     r_values = [pair.realized_r for pair in pairs if pair.realized_r is not None]
     wins = [value for value in r_values if value > 0.0]
     losses = [value for value in r_values if value < 0.0]
+    gross_win_r = sum(wins)
+    gross_loss_r = abs(sum(losses))
     pnl_values = [pair.realized_pnl for pair in pairs if pair.realized_pnl is not None]
     equity_curve: list[float] = []
     running = 0.0
@@ -548,6 +560,8 @@ def completed_trade_stats(pairs: list[TradePair]) -> dict[str, Any]:
         "win_rate": round(sum(1 for value in r_values if value > 0.0) / len(r_values) * 100.0, 4)
         if r_values
         else None,
+        "profit_factor": round(gross_win_r / gross_loss_r, 8) if gross_loss_r > 0 else None,
+        "profit_factor_infinite": bool(gross_win_r > 0 and gross_loss_r == 0),
         "max_win_r": round(max(wins), 8) if wins else None,
         "max_loss_r": round(min(losses), 8) if losses else None,
         "equity_curve_r": equity_curve,
@@ -560,6 +574,163 @@ def grouped_stats(pairs: list[TradePair], key_fn: Callable[[TradePair], str]) ->
     for pair in pairs:
         groups[key_fn(pair)].append(pair)
     return {key: completed_trade_stats(group) for key, group in sorted(groups.items())}
+
+
+def profit_factor_passes(stats: dict[str, Any], threshold: float) -> bool:
+    value = safe_float(stats.get("profit_factor"))
+    if value is not None:
+        return value >= threshold
+    return bool(stats.get("profit_factor_infinite"))
+
+
+def format_profit_factor(value: Any, infinite: bool = False) -> str:
+    if infinite:
+        return "inf"
+    parsed = safe_float(value)
+    if parsed is None:
+        return "n/a"
+    return f"{parsed:.2f}"
+
+
+def group_extreme(
+    pairs: list[TradePair],
+    key_fn: Callable[[TradePair], str],
+    *,
+    best: bool,
+) -> dict[str, Any] | None:
+    totals: dict[str, list[float]] = defaultdict(list)
+    for pair in pairs:
+        if pair.realized_r is not None:
+            totals[key_fn(pair)].append(pair.realized_r)
+    if not totals:
+        return None
+    key, values = sorted(
+        totals.items(),
+        key=lambda item: (sum(item[1]), item[0]),
+        reverse=best,
+    )[0]
+    return {
+        "name": key,
+        "completed_trades": len(values),
+        "realized_r": round(sum(values), 8),
+    }
+
+
+def most_common_blocker(decisions: list[dict[str, Any]], strategy: str | None = None) -> str | None:
+    counts: Counter[str] = Counter()
+    for decision in decisions:
+        if strategy and str(decision.get("strategy_version") or "unknown") != strategy:
+            continue
+        if decision.get("decision") not in {"rejected", "conflict_skipped", "paused_blocked", "failed"}:
+            continue
+        for blocker in blockers_from_reason(decision.get("reason")):
+            counts[blocker] += 1
+    if not counts:
+        return None
+    return counts.most_common(1)[0][0]
+
+
+def strategy_campaign_summary(
+    decisions: list[dict[str, Any]],
+    pairs: list[TradePair],
+    thresholds: CampaignThresholds,
+) -> dict[str, dict[str, Any]]:
+    strategies = sorted(
+        {
+            str(item.get("strategy_version") or "unknown")
+            for item in decisions
+        }
+        | {pair.strategy_version for pair in pairs}
+    )
+    result: dict[str, dict[str, Any]] = {}
+    for strategy in strategies:
+        strategy_pairs = [pair for pair in pairs if pair.strategy_version == strategy]
+        completed = [pair for pair in strategy_pairs if pair.closed_at is not None]
+        open_pairs = [pair for pair in strategy_pairs if pair.closed_at is None]
+        stats = completed_trade_stats(completed)
+        result[strategy] = {
+            "completed_trades": len(completed),
+            "open_trades": len(open_pairs),
+            "realized_r": stats["total_realized_r"],
+            "average_r": stats["average_r"],
+            "median_r": stats["median_r"],
+            "win_rate": stats["win_rate"],
+            "profit_factor": stats["profit_factor"],
+            "profit_factor_infinite": stats["profit_factor_infinite"],
+            "max_drawdown_r": stats["max_drawdown_r"],
+            "worst_symbol": group_extreme(completed, lambda pair: pair.symbol, best=False),
+            "best_symbol": group_extreme(completed, lambda pair: pair.symbol, best=True),
+            "worst_session": group_extreme(completed, lambda pair: pair.session_bucket, best=False),
+            "best_session": group_extreme(completed, lambda pair: pair.session_bucket, best=True),
+            "most_common_blocker": most_common_blocker(decisions, strategy),
+            "sample_too_small": len(completed) < thresholds.min_observation_trades,
+        }
+    return result
+
+
+def campaign_status(
+    completed_stats: dict[str, Any],
+    strategy_summaries: dict[str, dict[str, Any]],
+    telemetry_context: dict[str, Any],
+    thresholds: CampaignThresholds,
+) -> dict[str, Any]:
+    completed_count = int(completed_stats.get("count") or 0)
+    avg_r = safe_float(completed_stats.get("average_r"))
+    max_dd = safe_float(completed_stats.get("max_drawdown_r")) or 0.0
+    statuses: list[str] = ["promotion_not_allowed", "research_only"]
+    warnings: list[str] = []
+
+    if completed_count < thresholds.min_observation_trades:
+        statuses.append("sample_too_small")
+    if max_dd > thresholds.max_forward_drawdown_r:
+        statuses.append("warning_drawdown")
+        warnings.append("forward drawdown exceeds configured threshold")
+    if not telemetry_context.get("available"):
+        statuses.append("warning_parity_missing")
+        warnings.append("runtime telemetry/parity context is unavailable in this report")
+
+    serious_sample = completed_count >= thresholds.min_serious_sample_trades
+    avg_under = avg_r is not None and avg_r < thresholds.min_forward_avg_r
+    pf_under = not profit_factor_passes(completed_stats, thresholds.min_forward_profit_factor)
+    if serious_sample and (avg_under or pf_under):
+        statuses.append("warning_strategy_underperforming")
+        warnings.append("forward paper average R or profit factor is below threshold")
+
+    if "warning_drawdown" in statuses or "warning_strategy_underperforming" in statuses:
+        statuses.append("pause_recommended")
+
+    if completed_count >= thresholds.min_observation_trades and not any(
+        status.startswith("warning_") for status in statuses
+    ):
+        statuses.append("healthy_observation")
+
+    if "pause_recommended" in statuses:
+        recommended_action = "pause_and_review"
+    elif completed_count < thresholds.min_observation_trades:
+        recommended_action = "insufficient_sample"
+    elif "warning_parity_missing" in statuses:
+        recommended_action = "check_parity"
+    elif "warning_strategy_underperforming" in statuses:
+        recommended_action = "do_not_promote"
+    else:
+        negative_drag = any(
+            (summary.get("worst_symbol") or {}).get("realized_r", 0) < 0
+            or (summary.get("worst_session") or {}).get("realized_r", 0) < 0
+            for summary in strategy_summaries.values()
+        )
+        recommended_action = (
+            "investigate_session_or_symbol_drag" if negative_drag else "keep_observing"
+        )
+
+    return {
+        "statuses": statuses,
+        "recommended_action": recommended_action,
+        "warnings": warnings,
+        "thresholds": asdict(thresholds),
+        "completed_trades": completed_count,
+        "promotion_like_sample_observed": completed_count >= thresholds.promotion_like_sample_trades,
+        "analysis_only": True,
+    }
 
 
 def flat_reason(decision_counts: dict[str, int], telemetry_context: dict[str, Any]) -> str:
@@ -581,8 +752,10 @@ def summarize(
     trades: list[dict[str, Any]],
     positions: list[dict[str, Any]],
     telemetry_context: dict[str, Any] | None = None,
+    thresholds: CampaignThresholds | None = None,
 ) -> dict[str, Any]:
     telemetry_context = telemetry_context or {"available": False}
+    thresholds = thresholds or CampaignThresholds()
     pairs = pair_auto_trades(decisions, trades, positions)
     completed = [pair for pair in pairs if pair.closed_at is not None]
     open_pairs = [pair for pair in pairs if pair.closed_at is None]
@@ -621,8 +794,14 @@ def summarize(
         daily_r[day] += pair.realized_r or 0.0
 
     completed_overall = completed_trade_stats(completed)
+    strategy_campaign = strategy_campaign_summary(decisions, pairs, thresholds)
+    campaign = campaign_status(completed_overall, strategy_campaign, telemetry_context, thresholds)
     return {
         "generated_at": int(datetime.now(tz=UTC).timestamp() * 1000),
+        "campaign_status": campaign["statuses"],
+        "recommended_action": campaign["recommended_action"],
+        "campaign": campaign,
+        "per_strategy_campaign": strategy_campaign,
         "decisions_total": len(decisions),
         "decision_counts": dict(decision_counts),
         "strategy_counts": dict(strategy_counts),
@@ -665,8 +844,8 @@ def render_stats_table(stats_by_key: dict[str, dict[str, Any]], heading: str, em
         return lines
     lines.extend(
         [
-            "| Group | Count | Total PnL | Total R | Avg R | Median R | Win rate | Max win | Max loss | Max DD |",
-            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            "| Group | Count | Total PnL | Total R | Avg R | Median R | Win rate | PF | Max win | Max loss | Max DD |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
     )
     for name, stats in stats_by_key.items():
@@ -674,6 +853,7 @@ def render_stats_table(stats_by_key: dict[str, dict[str, Any]], heading: str, em
             f"| `{name}` | `{stats['count']}` | `{signed_money(stats['total_realized_pnl'])}` "
             f"| `{signed_r(stats['total_realized_r'])}` | `{signed_r(stats['average_r'])}` "
             f"| `{signed_r(stats['median_r'])}` | `{pct(stats['win_rate'])}` "
+            f"| `{format_profit_factor(stats.get('profit_factor'), bool(stats.get('profit_factor_infinite')))}` "
             f"| `{signed_r(stats['max_win_r'])}` | `{signed_r(stats['max_loss_r'])}` "
             f"| `{signed_r(stats['max_drawdown_r'])}` |"
         )
@@ -690,12 +870,46 @@ def render_count_map(title: str, values: dict[str, int], empty: str) -> list[str
     return lines
 
 
+def extreme_label(item: dict[str, Any] | None) -> str:
+    if not item:
+        return "n/a"
+    return f"{item['name']} {signed_r(item['realized_r'])}"
+
+
+def render_strategy_campaign(summary: dict[str, Any]) -> list[str]:
+    lines = ["", "## Per-Strategy Campaign Summary", ""]
+    strategies = summary.get("per_strategy_campaign") or {}
+    if not strategies:
+        lines.append("- No strategy-level campaign data yet.")
+        return lines
+    lines.extend(
+        [
+            "| Strategy | Completed | Open | Realized R | Avg R | Median R | Win rate | PF | Max DD | Worst symbol | Worst session | Blocker | Sample small |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- | --- |",
+        ]
+    )
+    for strategy, item in strategies.items():
+        lines.append(
+            f"| `{strategy}` | `{item['completed_trades']}` | `{item['open_trades']}` "
+            f"| `{signed_r(item['realized_r'])}` | `{signed_r(item['average_r'])}` "
+            f"| `{signed_r(item['median_r'])}` | `{pct(item['win_rate'])}` "
+            f"| `{format_profit_factor(item.get('profit_factor'), bool(item.get('profit_factor_infinite')))}` "
+            f"| `{signed_r(item['max_drawdown_r'])}` | `{extreme_label(item.get('worst_symbol'))}` "
+            f"| `{extreme_label(item.get('worst_session'))}` "
+            f"| `{item.get('most_common_blocker') or 'n/a'}` "
+            f"| `{'yes' if item.get('sample_too_small') else 'no'}` |"
+        )
+    return lines
+
+
 def render_markdown(summary: dict[str, Any], decisions: list[dict[str, Any]]) -> str:
     stats = summary["completed_stats"]
+    campaign = summary["campaign"]
     lines = [
         "# Forward Paper Report",
         "",
         f"- Generated: `{utc_text(summary['generated_at'])}`",
+        f"- Recommended action: `{summary['recommended_action']}`",
         f"- Decisions logged: `{summary['decisions_total']}`",
         f"- Auto entries: `{summary['auto_entries']}`",
         f"- Completed auto trades: `{summary['completed_trades']}`",
@@ -708,9 +922,32 @@ def render_markdown(summary: dict[str, Any], decisions: list[dict[str, Any]]) ->
         f"- Win rate: `{pct(stats['win_rate'])}`",
         f"- Max drawdown: `{signed_r(stats['max_drawdown_r'])}`",
         "",
-        "## Decisions",
+        "## Campaign Status",
+        "",
+        f"- Statuses: `{', '.join(campaign['statuses'])}`",
+        f"- Recommended action: `{campaign['recommended_action']}`",
+        f"- Analysis only: `yes`",
+        f"- Promotion-like sample observed: `{'yes' if campaign['promotion_like_sample_observed'] else 'no'}`",
+        f"- Min observation trades: `{campaign['thresholds']['min_observation_trades']}`",
+        f"- Serious sample trades: `{campaign['thresholds']['min_serious_sample_trades']}`",
+        f"- Promotion-like sample trades: `{campaign['thresholds']['promotion_like_sample_trades']}`",
+        f"- Max forward drawdown threshold: `{campaign['thresholds']['max_forward_drawdown_r']:.2f}R`",
+        f"- Min forward average R: `{campaign['thresholds']['min_forward_avg_r']:.3f}R`",
+        f"- Min forward profit factor: `{campaign['thresholds']['min_forward_profit_factor']:.2f}`",
         "",
     ]
+    if campaign["warnings"]:
+        lines.extend(["Warnings:", ""])
+        for warning in campaign["warnings"]:
+            lines.append(f"- {warning}")
+        lines.append("")
+
+    lines.extend(
+        [
+        "## Decisions",
+        "",
+        ]
+    )
 
     if summary["decision_counts"]:
         for name, count in sorted(summary["decision_counts"].items()):
@@ -718,6 +955,7 @@ def render_markdown(summary: dict[str, Any], decisions: list[dict[str, Any]]) ->
     else:
         lines.append("- No auto-paper decisions logged yet.")
 
+    lines.extend(render_strategy_campaign(summary))
     lines.extend(render_stats_table(summary["grouped_stats"]["by_strategy"], "Strategy Performance", "No completed auto-paper exits yet."))
     lines.extend(render_stats_table(summary["grouped_stats"]["by_symbol"], "Symbol Performance", "No completed auto-paper exits yet."))
     lines.extend(render_stats_table(summary["grouped_stats"]["by_session_bucket"], "Session Performance", "No completed auto-paper exits yet."))
@@ -793,6 +1031,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--json-out", type=Path)
     parser.add_argument("--markdown-out", type=Path)
     parser.add_argument("--json", action="store_true", help="Print JSON instead of Markdown.")
+    parser.add_argument("--min-observation-trades", type=int, default=30)
+    parser.add_argument("--min-serious-sample-trades", type=int, default=60)
+    parser.add_argument("--promotion-like-sample-trades", type=int, default=80)
+    parser.add_argument("--max-forward-drawdown-r", type=float, default=5.0)
+    parser.add_argument("--min-forward-avg-r", type=float, default=0.05)
+    parser.add_argument("--min-forward-profit-factor", type=float, default=1.15)
     return parser.parse_args()
 
 
@@ -805,7 +1049,15 @@ def main() -> int:
     symbol = args.symbol.upper() if args.symbol else None
     decisions, trades, positions = load_forward_data(args.db, since_ms, args.strategy, symbol)
     telemetry_context = load_telemetry_context(args.db, since_ms, args.strategy, symbol)
-    summary = summarize(decisions, trades, positions, telemetry_context)
+    thresholds = CampaignThresholds(
+        min_observation_trades=args.min_observation_trades,
+        min_serious_sample_trades=args.min_serious_sample_trades,
+        promotion_like_sample_trades=args.promotion_like_sample_trades,
+        max_forward_drawdown_r=args.max_forward_drawdown_r,
+        min_forward_avg_r=args.min_forward_avg_r,
+        min_forward_profit_factor=args.min_forward_profit_factor,
+    )
+    summary = summarize(decisions, trades, positions, telemetry_context, thresholds)
     markdown = render_markdown(summary, decisions)
 
     if args.json_out:

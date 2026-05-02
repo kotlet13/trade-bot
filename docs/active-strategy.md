@@ -10,6 +10,7 @@ Current active gated paper strategies:
 - Execution: local SQLite paper trades only
 - Live funds: disabled
 - Default runtime config: `docker-compose.yml` sets `AUTO_PAPER_TRADING=true` for the approved guarded local paper test
+- Local control: DB-backed pause/resume can block new auto entries without changing Compose
 
 The secondary bot uses the same reclaim setup, score threshold, guardrails, stop/TP handling, and fresh public Binance USD-M data requirements, but ignores the OI-change score component. The focused confirmation artifact is `tmp/research_runs/ai_scorecard_v2_ablate_oi_confirm_universe30_20260428.json`.
 
@@ -22,8 +23,19 @@ Guardrails:
 - Max `3` auto entries per UTC day
 - Daily realized-loss kill switch at `2%`
 - Entry requires the approved scorecard gate, attached stop-loss, and TP1
+- Manual pause blocks new auto entries only; it does not cancel positions, reset the account, or force trades
 
 Runtime paper exits currently use a single full-position attached stop-loss and TP1. The research harness also has `runtime_exit_parity` candidates so this simpler runtime exit model can be compared directly against the older TP1/break-even/TP2 research exit model without changing the active paper strategies.
+
+Status and local control:
+
+```powershell
+Invoke-RestMethod -Uri http://localhost:8081/api/auto-paper/status
+Invoke-RestMethod -Uri http://localhost:8081/api/auto-paper/pause -Method Post -ContentType "application/json" -Body '{"reason":"manual review"}'
+Invoke-RestMethod -Uri http://localhost:8081/api/auto-paper/resume -Method Post -ContentType "application/json" -Body '{"reason":"review complete"}'
+```
+
+These endpoints are paper-only. The status endpoint is read-only. Pause/resume only change the local SQLite control flag for future auto entries.
 
 Forward paper analytics:
 
@@ -32,6 +44,7 @@ python scripts\forward_paper_report.py --markdown-out tmp\forward_paper_report_l
 ```
 
 The report reads `data/tradebot.db` and summarizes auto-paper entries, rejected technical-ready setups, blockers, exits, realized PnL/R, strategy/symbol/session/day/outcome groupings, open-trade validity, conflict skips, and rejected-setup follow-up when telemetry is available.
+It also includes campaign status, per-strategy campaign summaries, and analysis-only recommended actions such as `keep_observing`, `pause_and_review`, `insufficient_sample`, or `check_parity`. It does not pause the bot automatically.
 
 Daily diagnostics:
 
@@ -40,6 +53,24 @@ python scripts\daily_paper_diagnostics.py
 ```
 
 This command is read-only. It writes latest reports under `tmp/`, runs parity for both active strategies, continues after individual report failures, and does not call `/api/paper/*`.
+
+Append local campaign observations:
+
+```powershell
+python scripts\paper_campaign_log.py --note "daily check"
+```
+
+Compare active paper bots:
+
+```powershell
+python scripts\strategy_forward_compare.py --markdown-out tmp\strategy_forward_compare_latest.md --json-out tmp\strategy_forward_compare_latest.json
+```
+
+Back up the local paper DB:
+
+```powershell
+python scripts\backup_paper_db.py --keep-last 10
+```
 
 Runtime telemetry:
 
@@ -65,7 +96,7 @@ python scripts\market_memory_dataset.py --markdown-out tmp\market_memory_latest.
 
 The collector writes classified public RSS events to `telemetry_news_events`; the impact script joins them to archived candles and summarizes forward returns. The market-memory script combines candle, futures, news, signal, and paper-decision context for future harness research. This is research-only and does not change `ai_score_v2_base_score7`, `ai_score_v2_ablate_oi`, auto-paper slots, or live execution boundaries.
 
-Docker Compose also runs the `news-events` sidecar with `restart: unless-stopped`. The sidecar refreshes the same news/event and market-memory diagnostics every `900` seconds and writes local latest reports under `tmp/`; it does not call paper-trading endpoints.
+Docker Compose also runs the `news-events` sidecar with `restart: unless-stopped` and an optional read-only `paper-diagnostics` sidecar. The diagnostics sidecar runs `scripts\daily_paper_diagnostics_service.py`, writes latest reports under `tmp/`, may call `/health`, `/api/dashboard`, and `/api/auto-paper/status`, and does not call `/api/paper/*`.
 
 Runtime/harness parity:
 

@@ -84,6 +84,33 @@ def run_health_check(base_url: str, timeout_seconds: float) -> DiagnosticRun:
         )
 
 
+def fetch_json_report(name: str, url: str, out_path: Path, timeout_seconds: float) -> DiagnosticRun:
+    try:
+        with urllib.request.urlopen(url, timeout=timeout_seconds) as response:
+            body = response.read().decode("utf-8", errors="replace")
+            payload = json.loads(body)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+            ok = response.status == 200
+            return DiagnosticRun(
+                name=name,
+                command=["GET", url],
+                returncode=0 if ok else 1,
+                stdout_tail=f"HTTP {response.status}: wrote {out_path}",
+                stderr_tail="" if ok else "status endpoint returned an unexpected response",
+                ok=ok,
+            )
+    except (json.JSONDecodeError, urllib.error.URLError, TimeoutError, OSError) as error:
+        return DiagnosticRun(
+            name=name,
+            command=["GET", url],
+            returncode=1,
+            stdout_tail="",
+            stderr_tail=f"status fetch failed for {url}: {error}",
+            ok=False,
+        )
+
+
 def render_markdown(runs: list[DiagnosticRun], skipped: list[str]) -> str:
     lines = ["# Daily Paper Diagnostics", ""]
     for run in runs:
@@ -165,6 +192,14 @@ def main() -> int:
     ]
 
     if app_healthy:
+        runs.append(
+            fetch_json_report(
+                "auto_paper_status",
+                f"{args.base_url.rstrip('/')}/api/auto-paper/status",
+                args.tmp_dir / "auto_paper_status_latest.json",
+                args.health_timeout_seconds,
+            )
+        )
         commands.extend(
             [
                 (

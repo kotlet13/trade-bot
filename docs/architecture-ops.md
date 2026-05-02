@@ -9,6 +9,7 @@ Trenutna aplikacija ima pet osnovnih delov:
 - SQLite baza v `data/tradebot.db`
 - Docker runtime preko `Dockerfile` in `docker-compose.yml`
 - `news-events` Python sidecar za research-only public RSS event zbiranje
+- `paper-diagnostics` Python sidecar za read-only forward-paper diagnostics
 
 ## Runtime flow
 
@@ -22,6 +23,7 @@ Zagon poteka takole:
 6. paper orderji in pozicije se obdelujejo lokalno v SQLite bazi
 7. runtime telemetry worker nizkofrekvencno arhivira javne market podatke za prihodnjo analizo
 8. `news-events` sidecar vsakih `900` sekund osvezi public RSS event archive in lokalne diagnosticne reporte
+9. `paper-diagnostics` sidecar vsakih `PAPER_DIAGNOSTICS_INTERVAL_SECONDS` sekund osvezi read-only paper/parity reporte
 
 ## Trenutni HTTP API
 
@@ -38,6 +40,7 @@ Vrne:
 - market tickerje
 - candle podatke
 - paper snapshot racuna, pozicij, orderjev in trade loga
+- `auto_paper_status`
 - `signal_assistant` za izbrani simbol
   - primary paper strategy: `ai_score_v2_base_score7`
   - secondary paper strategy: `ai_score_v2_ablate_oi`
@@ -65,7 +68,34 @@ Auto-paper worker:
 - ne dovoli duplicate same-symbol/same-signal entryja cez primary/secondary strategijo, razen ce je `AUTO_PAPER_ALLOW_MULTI_STRATEGY_SAME_SIGNAL=true`
 - dnevni cap: `AUTO_PAPER_MAX_DAILY_ENTRIES`
 - kill switch: blokira nove auto entryje, ko dnevni realized PnL pade pod `AUTO_PAPER_MAX_DAILY_LOSS_PERCENT`
+- DB-backed pause/resume blokira samo nove auto entryje; ne preklice pozicij in ne resetira racuna
 - izhodi so se vedno lokalni price-triggerji na single full-position attached stop-loss / TP1
+
+### `GET /api/auto-paper/status`
+
+Read-only auto-paper operations surface. Vrne konfiguracijsko stanje, dnevne limite, active slots, daily realized PnL/R, kill-switch stanje, duplicate-conflict nastavitev, approved strategy list, open auto positions, latest decisions, pause state, UTC day, and `generated_at`.
+
+Endpoint ne odda, preklice, ali resetira paper orderjev.
+
+### `POST /api/auto-paper/pause`
+
+Payload:
+
+```json
+{"reason": "manual review", "paused_until": 1770000000000}
+```
+
+`paused_until` je opcijski epoch timestamp v milisekundah. Pause state se shrani v SQLite tabelo `auto_paper_control`, zato prezivi container restart. Ko je pause aktiven, auto-paper worker se vedno upravlja lokalne stop/TP izhode prek normalnega price-event flowa, vendar ne odpira novih entryjev.
+
+### `POST /api/auto-paper/resume`
+
+Payload:
+
+```json
+{"reason": "review complete"}
+```
+
+Resume samo ponovno dovoli normalno gated paper vedenje. Ne force-a trade-a.
 
 ### `GET /api/replay`
 
@@ -131,6 +161,9 @@ Runtime telemetry archive je locen od paper ledgerja in ne oddaja orderjev. Priv
 - `telemetry_futures_metric_rows`: USD-M 5m open interest, global account long/short, top-position long/short, taker long/short rows
 - `telemetry_signal_evaluations`: `SignalAssistant` snapshots, kadar jih runtime ze izracuna za dashboard ali auto-paper cycle
 - `telemetry_news_events`: research-only public RSS event classifications for news-impact diagnostics
+- `auto_paper_control`: local pause/resume flags
+- `auto_paper_control_events`: operational pause/resume audit log
+- `auto_paper_decisions.context_json`: nullable future-facing decision context for accepted, rejected, conflict-skipped, paused, and failed technical-ready decisions
 
 SQLite uporablja `DELETE` journal mode namesto WAL, da lahko Rust app in Python research sidecar zanesljivo delita isti bind-mounted DB na Docker Desktop/Windows. Skripte in app uporabljajo kratke busy timeoute; to je primerneje za lokalni nizkofrekvencni research workload kot locena baza.
 
@@ -147,6 +180,24 @@ python scripts\daily_paper_diagnostics.py
 ```
 
 This command orchestrates forward paper reporting, runtime telemetry reporting, parity for both active strategies, and market-memory reporting when the DB has the required telemetry. It does not place trades and does not call `/api/paper/*`.
+
+Local campaign log:
+
+```powershell
+python scripts\paper_campaign_log.py --note "daily check"
+```
+
+Strategy comparison:
+
+```powershell
+python scripts\strategy_forward_compare.py --markdown-out tmp\strategy_forward_compare_latest.md --json-out tmp\strategy_forward_compare_latest.json
+```
+
+SQLite backup:
+
+```powershell
+python scripts\backup_paper_db.py --keep-last 10
+```
 
 News/event zbiranje in impact diagnostika:
 
@@ -166,10 +217,20 @@ Collector uporablja javne RSS vire in deterministicen classifier. Impact script 
 - osvezuje news/event, market-memory, in telemetry report artefakte pod `tmp/`
 - ne klice `/api/paper/*` endpointov in ne oddaja orderjev
 
+`paper-diagnostics` sidecar:
+
+- uporablja `restart: unless-stopped`
+- deli `./data`, `./tmp`, in `./scripts`
+- izvaja `scripts/daily_paper_diagnostics_service.py`
+- privzeto uporablja `PAPER_DIAGNOSTICS_INTERVAL_SECONDS=21600`
+- klice samo read-only health/status/dashboard/parity poti
+- ne klice `/api/paper/*`, ne oddaja orderjev, in ne more ustaviti glavne aplikacije
+
 Operativna posledica:
 
 - stanje aplikacije je vezano na lokalni disk masina/container para
 - backup in prenos stanja sta za zdaj rocna
+- priporocen rocen backup: `python scripts\backup_paper_db.py --keep-last 10`
 - ni multi-user concurrency modela
 - `tmp/research_cache` in `tmp/derivatives_cache` ostaneta raziskovalna cache-a; durable runtime archive je v `data/tradebot.db`
 
@@ -199,6 +260,10 @@ Privzeta konfiguracija:
 - `NEWS_EVENT_COLLECTOR_LIMIT_PER_SOURCE=50`
 - `NEWS_EVENT_IMPACT_SINCE_HOURS=168`
 - `NEWS_EVENT_MARKET_MEMORY_SINCE_HOURS=168`
+- `PAPER_DIAGNOSTICS_INTERVAL_SECONDS=21600`
+- `PAPER_DIAGNOSTICS_SINCE_HOURS=24`
+- `PAPER_DIAGNOSTICS_BASE_URL=http://app:3000`
+- `PAPER_DIAGNOSTICS_SYMBOLS=ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT`
 
 Lokalni dostop:
 

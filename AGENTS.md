@@ -13,7 +13,7 @@ The project is not approved for live trading. Do not add live-funds execution or
 - Paper trading: approved for primary `ai_score_v2_base_score7` and secondary `ai_score_v2_ablate_oi`; auto-paper is enabled in Compose for local paper ledger entries only, with the documented guardrails.
 - Latest completed focused full walk-forward run: `tmp/research_runs/ai_scorecard_v2_ablate_oi_confirm_universe30_20260428.json`.
 - Latest focused full run result: `ai_score_v2_ablate_oi` confirmed its harness promotion-gate pass after the full ablation run.
-- Runtime status: `ai_score_v2_base_score7` and `ai_score_v2_ablate_oi` are wired into live `SignalAssistant` as gated paper strategies. Auto-paper uses one global slot, idempotency by `strategy + symbol + signal_close_time`, duplicate same-symbol/same-signal conflict blocking across strategies, daily caps, and local SQLite paper fills only.
+- Runtime status: `ai_score_v2_base_score7` and `ai_score_v2_ablate_oi` are wired into live `SignalAssistant` as gated paper strategies. Auto-paper uses one global slot, idempotency by `strategy + symbol + signal_close_time`, duplicate same-symbol/same-signal conflict blocking across strategies, daily caps, DB-backed local pause/resume, and local SQLite paper fills only.
 - Previous best non-passing candidate: `v2_reclaim_overlap_only`, from `tmp/research_runs/research_run_20260426_150229.json`.
 - Bot service may be running on `http://localhost:8081`; verify with `/health`.
 
@@ -46,10 +46,14 @@ If no strategy passes, the correct action is to stay flat and document the faile
 Run checks:
 
 ```powershell
-python -m py_compile scripts\strategy_study.py scripts\research_harness.py scripts\event_dataset.py scripts\predictive_meta_model.py scripts\candidate_diagnostics.py scripts\daily_paper_diagnostics.py scripts\forward_paper_report.py scripts\runtime_harness_parity.py scripts\runtime_telemetry_report.py scripts\market_memory_dataset.py
+python -m py_compile scripts\strategy_study.py scripts\research_harness.py scripts\event_dataset.py scripts\predictive_meta_model.py scripts\candidate_diagnostics.py scripts\daily_paper_diagnostics.py scripts\daily_paper_diagnostics_service.py scripts\forward_paper_report.py scripts\paper_campaign_log.py scripts\strategy_forward_compare.py scripts\backup_paper_db.py scripts\runtime_harness_parity.py scripts\runtime_telemetry_report.py scripts\market_memory_dataset.py
 python scripts\test_research_harness.py
 python scripts\test_predictive_meta_model.py
 python scripts\test_forward_paper_report.py
+python scripts\test_paper_campaign_log.py
+python scripts\test_strategy_forward_compare.py
+python scripts\test_backup_paper_db.py
+python scripts\test_daily_paper_diagnostics.py
 python scripts\test_runtime_harness_parity.py
 python scripts\test_runtime_telemetry_report.py
 python scripts\test_market_memory_dataset.py
@@ -63,6 +67,19 @@ Daily read-only diagnostics:
 
 ```powershell
 python scripts\daily_paper_diagnostics.py
+python scripts\paper_campaign_log.py --note "daily check"
+```
+
+Compare active paper bots:
+
+```powershell
+python scripts\strategy_forward_compare.py --markdown-out tmp\strategy_forward_compare_latest.md --json-out tmp\strategy_forward_compare_latest.json
+```
+
+Backup local paper DB:
+
+```powershell
+python scripts\backup_paper_db.py --keep-last 10
 ```
 
 Run fast smoke research:
@@ -132,6 +149,8 @@ Do not commit by default:
 Next research step:
 
 - Keep paper-testing `ai_score_v2_base_score7` and `ai_score_v2_ablate_oi` in guarded mode and journal every accepted/rejected signal.
+- Use `GET /api/auto-paper/status` and the dashboard status panel to monitor enabled/paused state, open slots, daily entries, kill switch state, and latest decisions.
+- Use `POST /api/auto-paper/pause` / `resume` only as local paper controls for new entries; never treat them as live execution controls.
 - Add forward-paper diagnostics comparing runtime scorecard decisions against the harness assumptions.
 - Run parity for both runtime strategies and monitor whether the OI-ablation secondary bot improves forward paper quality.
 - Use `regime_abstention_filters`, `runtime_exit_parity`, and `relative_strength_refinement` as harness-only research families; do not wire them into runtime without normal promotion gates and explicit approval.

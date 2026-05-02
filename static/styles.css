@@ -97,6 +97,7 @@ h2 {
 }
 
 .chart-panel,
+.auto-paper-panel,
 .replay-panel,
 .panel:first-of-type,
 .panel:last-of-type {
@@ -347,12 +348,31 @@ h2 {
 }
 
 .secondary-bot-grid,
-.secondary-bot-warnings {
+.secondary-bot-warnings,
+.auto-paper-detail {
   display: grid;
   gap: 8px;
   color: var(--muted);
   font-size: 0.92rem;
   line-height: 1.45;
+}
+
+.auto-paper-detail {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 14px;
+}
+
+.auto-paper-row {
+  padding: 12px;
+  border: 1px solid rgba(166, 184, 214, 0.1);
+  border-radius: 8px;
+  background: rgba(3, 8, 16, 0.38);
+}
+
+.auto-paper-row strong {
+  display: block;
+  color: var(--text);
+  margin-bottom: 5px;
 }
 
 #priceChart {
@@ -475,6 +495,7 @@ thead th {
   }
 
   .chart-panel,
+  .auto-paper-panel,
   .panel:first-of-type,
   .panel:last-of-type {
     grid-column: auto;
@@ -506,5 +527,9 @@ thead th {
 
   .panel-head {
     flex-direction: column;
+  }
+
+  .auto-paper-detail {
+    grid-template-columns: 1fr;
   }
 }

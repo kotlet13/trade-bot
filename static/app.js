@@ -5,6 +5,7 @@ const appState = {
   refreshTimer: null,
   signalAssistant: null,
   secondarySignalAssistants: [],
+  autoPaperStatus: null,
   replayReport: null,
   replaySymbol: null,
   replayLoading: false,
@@ -23,6 +24,10 @@ const signalRiskPlan = document.querySelector("#signalRiskPlan");
 const signalWarnings = document.querySelector("#signalWarnings");
 const secondarySignals = document.querySelector("#secondarySignals");
 const prefillSignalTrade = document.querySelector("#prefillSignalTrade");
+const autoPaperCards = document.querySelector("#autoPaperCards");
+const autoPaperDetail = document.querySelector("#autoPaperDetail");
+const pauseAutoPaper = document.querySelector("#pauseAutoPaper");
+const resumeAutoPaper = document.querySelector("#resumeAutoPaper");
 const replayUpdatedAt = document.querySelector("#replayUpdatedAt");
 const replaySummary = document.querySelector("#replaySummary");
 const replayCards = document.querySelector("#replayCards");
@@ -78,8 +83,10 @@ function renderDashboard(data) {
   appState.symbol = data.selected_symbol;
   appState.signalAssistant = data.signal_assistant || null;
   appState.secondarySignalAssistants = data.secondary_signal_assistants || [];
+  appState.autoPaperStatus = data.auto_paper_status || null;
   syncTradeSymbolOptions(data.watchlist);
   renderSummary(data.paper);
+  renderAutoPaperStatus(appState.autoPaperStatus);
   renderMarket(data.tickers);
   renderChart(data.candles, data.selected_symbol, data.interval);
   renderSignalAssistant(data.signal_assistant);
@@ -208,6 +215,114 @@ function renderSummary(paper) {
       `
     )
     .join("");
+}
+
+function renderAutoPaperStatus(status) {
+  if (!autoPaperCards || !autoPaperDetail) {
+    return;
+  }
+  if (!status) {
+    autoPaperCards.innerHTML = `
+      <article class="signal-card">
+        <span class="signal-card-label">Status</span>
+        <span class="signal-card-value">Unavailable</span>
+        <span class="signal-card-subvalue">Paper-only status payload missing</span>
+      </article>
+    `;
+    autoPaperDetail.innerHTML = "";
+    if (pauseAutoPaper) pauseAutoPaper.disabled = true;
+    if (resumeAutoPaper) resumeAutoPaper.disabled = true;
+    return;
+  }
+
+  const pause = status.pause || {};
+  const latest = status.latest_auto_paper_decision || {};
+  const latestRejected = status.latest_rejected_decision || {};
+  const openPosition = (status.open_auto_positions || [])[0] || null;
+  const blockReasons = status.new_entries_block_reasons?.length
+    ? status.new_entries_block_reasons.join(", ")
+    : "none";
+  const enabledLabel = status.enabled_by_config ? "Enabled" : "Disabled";
+  const pauseLabel = pause.paused ? "Paused" : "Resumed";
+  const killLabel = status.kill_switch_blocking_new_entries ? "Blocking" : "Clear";
+
+  autoPaperCards.innerHTML = [
+    {
+      label: "Config",
+      value: enabledLabel,
+      subvalue: "Local SQLite paper-only",
+    },
+    {
+      label: "Pause",
+      value: pauseLabel,
+      subvalue: pause.reason || "No pause reason",
+    },
+    {
+      label: "Slots",
+      value: `${status.current_active_auto_slots}/${status.max_open_slots}`,
+      subvalue: `${status.open_auto_position_count} open auto positions`,
+    },
+    {
+      label: "Daily entries",
+      value: `${status.current_daily_entries}/${status.max_daily_entries}`,
+      subvalue: `Realized ${formatSignedMoney(status.daily_realized_pnl || 0)} / ${formatOptionalSignedR(status.daily_realized_r)}`,
+    },
+    {
+      label: "Kill switch",
+      value: killLabel,
+      subvalue: `Threshold ${formatSignedMoney(status.daily_loss_kill_switch_threshold_pnl || 0)}`,
+    },
+    {
+      label: "Latest decision",
+      value: latest.decision || "none",
+      subvalue: latest.created_at ? formatDateTime(latest.created_at) : "No decision logged",
+    },
+  ]
+    .map(
+      (item) => `
+        <article class="signal-card">
+          <span class="signal-card-label">${escapeHtml(item.label)}</span>
+          <span class="signal-card-value">${escapeHtml(item.value)}</span>
+          <span class="signal-card-subvalue">${escapeHtml(item.subvalue)}</span>
+        </article>
+      `
+    )
+    .join("");
+
+  autoPaperDetail.innerHTML = [
+    {
+      label: "New entry blocks",
+      value: blockReasons,
+    },
+    {
+      label: "Latest rejection",
+      value: latestRejected.reason || "none",
+    },
+    {
+      label: "Open auto position",
+      value: openPosition
+        ? `${openPosition.strategy_version || "unknown"} ${openPosition.symbol} qty ${formatQuantity(openPosition.quantity)} validity ${openPosition.open_validity}`
+        : "none",
+    },
+    {
+      label: "Approved strategies",
+      value: (status.approved_strategies || [])
+        .map((item) => `${item.role}: ${item.version}`)
+        .join(" | ") || "none",
+    },
+  ]
+    .map(
+      (item) => `
+        <div class="auto-paper-row">
+          <strong>${escapeHtml(item.label)}</strong>
+          <span>${escapeHtml(item.value)}</span>
+        </div>
+      `
+    )
+    .join("");
+
+  if (pauseAutoPaper) pauseAutoPaper.disabled = pause.paused || !status.enabled_by_config;
+  if (resumeAutoPaper) resumeAutoPaper.disabled = !pause.paused || !status.enabled_by_config;
 }
 
 function renderMarket(tickers) {
@@ -734,6 +849,9 @@ function formatNullableMoney(value) {
 }
 
 function formatSignedMoney(value) {
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return "n/a";
+  }
   const formatted = formatMoney(Math.abs(value));
   return `${value >= 0 ? "+" : "-"}${formatted}`;
 }
@@ -743,7 +861,14 @@ function formatSignedPercent(value) {
 }
 
 function formatSignedNumber(value) {
+  if (typeof value !== "number" || Number.isNaN(value)) {
+    return "n/a";
+  }
   return `${value >= 0 ? "+" : ""}${value.toFixed(2)}R`;
+}
+
+function formatOptionalSignedR(value) {
+  return typeof value === "number" && !Number.isNaN(value) ? `${value >= 0 ? "+" : ""}${value.toFixed(3)}R` : "n/a";
 }
 
 function formatSignalStage(value) {
@@ -850,6 +975,28 @@ function prefillTradeFromSignal() {
   tradeFeedback.textContent = "Signal setup je prenesen v paper order form. Pred oddajo se rocno preveri novice in korelacije.";
 }
 
+async function setAutoPaperPause(paused) {
+  const reason = window.prompt(paused ? "Reason for pausing auto-paper?" : "Reason for resuming auto-paper?");
+  if (reason === null) {
+    return;
+  }
+  const endpoint = paused ? "/api/auto-paper/pause" : "/api/auto-paper/resume";
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason: reason.trim() || (paused ? "Paused from dashboard." : "Resumed from dashboard.") }),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({ error: "Auto-paper control update failed." }));
+    tradeFeedback.textContent = body.error || "Auto-paper control update failed.";
+    return;
+  }
+  const status = await response.json();
+  appState.autoPaperStatus = status;
+  renderAutoPaperStatus(status);
+  tradeFeedback.textContent = paused ? "Auto-paper entries are paused." : "Auto-paper entries are resumed.";
+}
+
 intervalButtons.forEach((button) => {
   button.addEventListener("click", async () => {
     appState.interval = button.dataset.interval;
@@ -872,6 +1019,16 @@ tradeOrderKind.addEventListener("change", syncOrderFormState);
 tradeForm.addEventListener("submit", submitTrade);
 resetAccount.addEventListener("click", resetPaperAccount);
 prefillSignalTrade.addEventListener("click", prefillTradeFromSignal);
+if (pauseAutoPaper) {
+  pauseAutoPaper.addEventListener("click", async () => {
+    await setAutoPaperPause(true);
+  });
+}
+if (resumeAutoPaper) {
+  resumeAutoPaper.addEventListener("click", async () => {
+    await setAutoPaperPause(false);
+  });
+}
 runReplay.addEventListener("click", async () => {
   await loadReplay(true);
 });

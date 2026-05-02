@@ -294,6 +294,77 @@ def positive_folds(fold_metrics: list[dict[str, Any]]) -> int:
     return sum(1 for item in fold_metrics if float(item.get("net_total_r") or 0.0) > 0.0)
 
 
+def group_summary_row(name: str, metrics: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "name": name,
+        "trades": metrics["executed_trades"],
+        "net_total_r": metrics["net_total_r"],
+        "net_avg_r": metrics["net_avg_r"],
+        "profit_factor": metrics["profit_factor"],
+    }
+
+
+def bottom_group(groups: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+    if not groups:
+        return None
+    name, metrics = sorted(
+        groups.items(),
+        key=lambda item: (
+            float(item[1].get("net_total_r") or 0.0),
+            item[0],
+        ),
+    )[0]
+    return group_summary_row(name, metrics)
+
+
+def best_group(groups: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+    if not groups:
+        return None
+    name, metrics = sorted(
+        groups.items(),
+        key=lambda item: (
+            float(item[1].get("net_total_r") or 0.0),
+            item[0],
+        ),
+        reverse=True,
+    )[0]
+    return group_summary_row(name, metrics)
+
+
+def failure_analysis(
+    fold_metrics: list[dict[str, Any]],
+    by_symbol: dict[str, dict[str, Any]],
+    by_session: dict[str, dict[str, Any]],
+    holdout_records: list[harness.TradeRecord],
+) -> dict[str, Any]:
+    holdout_by_symbol = group_records(holdout_records, lambda record: record.symbol)
+    holdout = harness.summarize_records(holdout_records)
+    holdout_top = best_group(holdout_by_symbol)
+    holdout_net = float(holdout.get("net_total_r") or 0.0)
+    holdout_top_share = None
+    if holdout_top and abs(holdout_net) > 1e-12:
+        holdout_top_share = rounded(float(holdout_top["net_total_r"]) / holdout_net)
+    worst_fold = None
+    if fold_metrics:
+        worst_fold = sorted(
+            fold_metrics,
+            key=lambda item: (
+                float(item.get("net_total_r") or 0.0),
+                int(item.get("fold") or 0),
+            ),
+        )[0]
+    return {
+        "worst_fold": worst_fold,
+        "worst_symbol": bottom_group(by_symbol),
+        "best_symbol": best_group(by_symbol),
+        "worst_session": bottom_group(by_session),
+        "best_session": best_group(by_session),
+        "holdout_top_symbol": holdout_top,
+        "holdout_top_symbol_net_share": holdout_top_share,
+        "research_only": True,
+    }
+
+
 def evaluate_records(
     candidate: harness.CandidateSpec,
     records: list[harness.TradeRecord],
@@ -350,6 +421,7 @@ def evaluate_records(
         "by_symbol": by_symbol,
         "by_session": by_session,
         "by_outcome": by_outcome,
+        "failure_analysis": failure_analysis(fold_metrics, by_symbol, by_session, holdout_records),
         "regime_buckets": regime,
         "diagnostic_distributions": {
             key: diagnostic_distribution(records, key)
@@ -397,16 +469,16 @@ def top_groups(groups: dict[str, dict[str, Any]], limit: int = 5) -> list[dict[s
         ),
         reverse=True,
     )[:limit]
-    return [
-        {
-            "name": name,
-            "trades": metrics["executed_trades"],
-            "net_total_r": metrics["net_total_r"],
-            "net_avg_r": metrics["net_avg_r"],
-            "profit_factor": metrics["profit_factor"],
-        }
-        for name, metrics in items
-    ]
+    return [group_summary_row(name, metrics) for name, metrics in items]
+
+
+def group_label(group: dict[str, Any] | None) -> str:
+    if not group:
+        return "n/a"
+    return (
+        f"{group['name']} trades={group['trades']} "
+        f"net={group['net_total_r']}R avg={group['net_avg_r']}R pf={group['profit_factor']}"
+    )
 
 
 def render_markdown(payload: dict[str, Any]) -> str:
@@ -443,6 +515,22 @@ def render_markdown(payload: dict[str, Any]) -> str:
                 f"| `{fold['fold']}` | `{fold['executed_trades']}` | `{fold['net_total_r']}` "
                 f"| `{fold['net_avg_r']}` | `{fold['profit_factor']}` | `{fold['max_drawdown_r']}` |"
             )
+        failure = item.get("failure_analysis") or {}
+        worst_fold = failure.get("worst_fold") or {}
+        lines.extend(
+            [
+                "",
+                "### Failure Analysis",
+                "",
+                f"- Research only: `{failure.get('research_only', True)}`",
+                f"- Worst fold: `{worst_fold.get('fold', 'n/a')}` net `{worst_fold.get('net_total_r', 'n/a')}R` trades `{worst_fold.get('executed_trades', 'n/a')}`",
+                f"- Worst symbol: `{group_label(failure.get('worst_symbol'))}`",
+                f"- Best symbol: `{group_label(failure.get('best_symbol'))}`",
+                f"- Worst session: `{group_label(failure.get('worst_session'))}`",
+                f"- Best session: `{group_label(failure.get('best_session'))}`",
+                f"- Holdout top symbol: `{group_label(failure.get('holdout_top_symbol'))}` share `{failure.get('holdout_top_symbol_net_share')}`",
+            ]
+        )
         lines.extend(["", "### Top Symbols", ""])
         for group in top_groups(item["by_symbol"]):
             lines.append(

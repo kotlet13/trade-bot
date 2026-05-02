@@ -220,6 +220,12 @@ struct CancelOrderRequest {
     reason: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct AutoPaperPauseRequest {
+    reason: Option<String>,
+    paused_until: Option<i64>,
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 enum OrderSide {
@@ -302,6 +308,85 @@ struct DashboardResponse {
     paper: PaperSnapshot,
     signal_assistant: SignalAssistant,
     secondary_signal_assistants: Vec<SignalAssistant>,
+    auto_paper_status: AutoPaperStatusResponse,
+}
+
+#[derive(Debug, Serialize)]
+struct AutoPaperStatusResponse {
+    enabled_by_config: bool,
+    max_open_slots: usize,
+    current_active_auto_slots: usize,
+    open_auto_position_count: usize,
+    max_daily_entries: usize,
+    current_daily_entries: usize,
+    daily_realized_pnl: f64,
+    daily_realized_r: Option<f64>,
+    daily_loss_kill_switch_threshold_pnl: f64,
+    daily_loss_kill_switch_threshold_percent: f64,
+    kill_switch_blocking_new_entries: bool,
+    duplicate_same_symbol_signal_blocking_enabled: bool,
+    approved_strategies: Vec<ApprovedStrategyStatus>,
+    open_auto_positions: Vec<AutoPaperOpenPosition>,
+    latest_auto_paper_decision_timestamp: Option<i64>,
+    latest_auto_paper_decision: Option<AutoPaperDecisionSnapshot>,
+    latest_entered_decision: Option<AutoPaperDecisionSnapshot>,
+    latest_rejected_decision: Option<AutoPaperDecisionSnapshot>,
+    latest_conflict_skipped_decision: Option<AutoPaperDecisionSnapshot>,
+    pause: AutoPaperPauseState,
+    new_entries_blocked: bool,
+    new_entries_block_reasons: Vec<String>,
+    current_utc_day: String,
+    generated_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct ApprovedStrategyStatus {
+    version: &'static str,
+    role: &'static str,
+    min_score: i32,
+}
+
+#[derive(Debug, Serialize)]
+struct AutoPaperPauseState {
+    paused: bool,
+    configured_paused: bool,
+    reason: Option<String>,
+    paused_until: Option<i64>,
+    updated_at: Option<i64>,
+    blocking_new_entries: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct AutoPaperOpenPosition {
+    symbol: String,
+    strategy_version: Option<String>,
+    quantity: f64,
+    avg_price: f64,
+    current_price: Option<f64>,
+    market_value: Option<f64>,
+    unrealized_pnl: Option<f64>,
+    stop_loss: Option<f64>,
+    take_profit: Option<f64>,
+    note: Option<String>,
+    open_validity: String,
+    updated_at: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct AutoPaperDecisionSnapshot {
+    id: i64,
+    strategy_version: String,
+    symbol: String,
+    signal_close_time: i64,
+    decision: String,
+    reason: Option<String>,
+    ai_score: Option<i64>,
+    stage: Option<String>,
+    technical_stage: Option<String>,
+    final_stage: Option<String>,
+    created_at: i64,
+    trade_id: Option<i64>,
+    context: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -785,6 +870,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/health", get(health))
         .route("/api/dashboard", get(get_dashboard))
         .route("/api/replay", get(get_signal_replay))
+        .route("/api/auto-paper/status", get(get_auto_paper_status))
+        .route("/api/auto-paper/pause", post(pause_auto_paper))
+        .route("/api/auto-paper/resume", post(resume_auto_paper))
         .route("/api/paper/orders", post(create_paper_order))
         .route("/api/paper/orders/:id/cancel", post(cancel_paper_order))
         .route("/api/paper/reset", post(reset_paper_account))
@@ -869,6 +957,13 @@ async fn get_dashboard(
         signal_assistants.remove(0)
     };
     let secondary_signal_assistants = signal_assistants;
+    let auto_paper_status = {
+        let db = state
+            .db
+            .lock()
+            .map_err(|_| ApiError::internal("Paper database lock is poisoned."))?;
+        load_auto_paper_status(&db, &state.auto_paper, now)?
+    };
 
     Ok(Json(DashboardResponse {
         watchlist: state.watchlist.clone(),
@@ -880,7 +975,47 @@ async fn get_dashboard(
         paper,
         signal_assistant,
         secondary_signal_assistants,
+        auto_paper_status,
     }))
+}
+
+async fn get_auto_paper_status(
+    State(state): State<AppState>,
+) -> Result<Json<AutoPaperStatusResponse>, ApiError> {
+    let now = Utc::now().timestamp_millis();
+    let db = state
+        .db
+        .lock()
+        .map_err(|_| ApiError::internal("Paper database lock is poisoned."))?;
+    Ok(Json(load_auto_paper_status(&db, &state.auto_paper, now)?))
+}
+
+async fn pause_auto_paper(
+    State(state): State<AppState>,
+    Json(payload): Json<AutoPaperPauseRequest>,
+) -> Result<Json<AutoPaperStatusResponse>, ApiError> {
+    let now = Utc::now().timestamp_millis();
+    let reason = sanitize_note(payload.reason).unwrap_or_else(|| "Paused manually.".to_string());
+    let db = state
+        .db
+        .lock()
+        .map_err(|_| ApiError::internal("Paper database lock is poisoned."))?;
+    set_auto_paper_paused(&db, true, &reason, payload.paused_until, now)?;
+    Ok(Json(load_auto_paper_status(&db, &state.auto_paper, now)?))
+}
+
+async fn resume_auto_paper(
+    State(state): State<AppState>,
+    Json(payload): Json<AutoPaperPauseRequest>,
+) -> Result<Json<AutoPaperStatusResponse>, ApiError> {
+    let now = Utc::now().timestamp_millis();
+    let reason = sanitize_note(payload.reason).unwrap_or_else(|| "Resumed manually.".to_string());
+    let db = state
+        .db
+        .lock()
+        .map_err(|_| ApiError::internal("Paper database lock is poisoned."))?;
+    set_auto_paper_paused(&db, false, &reason, None, now)?;
+    Ok(Json(load_auto_paper_status(&db, &state.auto_paper, now)?))
 }
 
 async fn get_signal_replay(
@@ -1275,6 +1410,21 @@ fn initialize_database(
         CREATE INDEX IF NOT EXISTS idx_auto_paper_decisions_created_at
             ON auto_paper_decisions(created_at);
 
+        CREATE TABLE IF NOT EXISTS auto_paper_control (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at INTEGER NOT NULL,
+            note TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS auto_paper_control_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            action TEXT NOT NULL,
+            reason TEXT,
+            paused_until INTEGER,
+            created_at INTEGER NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS telemetry_market_tickers (
             symbol TEXT NOT NULL,
             snapshot_time INTEGER NOT NULL,
@@ -1401,6 +1551,14 @@ fn initialize_database(
     ensure_column(connection, "auto_paper_decisions", "quantity", "REAL")?;
     ensure_column(connection, "auto_paper_decisions", "risk_per_unit", "REAL")?;
     ensure_column(connection, "auto_paper_decisions", "risk_amount", "REAL")?;
+    ensure_column(
+        connection,
+        "auto_paper_decisions",
+        "technical_stage",
+        "TEXT",
+    )?;
+    ensure_column(connection, "auto_paper_decisions", "final_stage", "TEXT")?;
+    ensure_column(connection, "auto_paper_decisions", "context_json", "TEXT")?;
 
     let account_exists: Option<i64> = connection
         .query_row("SELECT id FROM account WHERE id = 1", [], |row| row.get(0))
@@ -1765,6 +1923,379 @@ fn approved_paper_strategy_versions() -> String {
         .join(",")
 }
 
+fn load_auto_paper_status(
+    connection: &Connection,
+    config: &AutoPaperConfig,
+    now: i64,
+) -> Result<AutoPaperStatusResponse, ApiError> {
+    let stats = load_auto_paper_cycle_stats(connection, now)?;
+    let pause = load_auto_paper_control_state(connection, now)?;
+    let open_auto_positions = load_open_auto_positions(connection)?;
+    let latest_auto_paper_decision = load_latest_auto_paper_decision(connection, None)?;
+    let latest_entered_decision = load_latest_auto_paper_decision(connection, Some("entered"))?;
+    let latest_rejected_decision = load_latest_auto_paper_decision(connection, Some("rejected"))?;
+    let latest_conflict_skipped_decision =
+        load_latest_auto_paper_decision(connection, Some("conflict_skipped"))?;
+    let daily_loss_threshold = -(stats.initial_cash * config.max_daily_loss_percent / 100.0).abs();
+    let kill_switch_blocking = stats.daily_realized_pnl <= daily_loss_threshold;
+    let mut block_reasons = Vec::new();
+    if !config.enabled {
+        block_reasons.push("disabled_by_config".to_string());
+    }
+    if pause.blocking_new_entries {
+        block_reasons.push("paused".to_string());
+    }
+    if stats.active_slots >= config.max_open_slots {
+        block_reasons.push("max_open_slots_reached".to_string());
+    }
+    if stats.daily_entries >= config.max_daily_entries {
+        block_reasons.push("max_daily_entries_reached".to_string());
+    }
+    if kill_switch_blocking {
+        block_reasons.push("daily_loss_kill_switch".to_string());
+    }
+    let latest_auto_paper_decision_timestamp = latest_auto_paper_decision
+        .as_ref()
+        .map(|item| item.created_at);
+
+    Ok(AutoPaperStatusResponse {
+        enabled_by_config: config.enabled,
+        max_open_slots: config.max_open_slots,
+        current_active_auto_slots: stats.active_slots,
+        open_auto_position_count: open_auto_positions.len(),
+        max_daily_entries: config.max_daily_entries,
+        current_daily_entries: stats.daily_entries,
+        daily_realized_pnl: stats.daily_realized_pnl,
+        daily_realized_r: load_daily_realized_r(connection, now)?,
+        daily_loss_kill_switch_threshold_pnl: daily_loss_threshold,
+        daily_loss_kill_switch_threshold_percent: config.max_daily_loss_percent,
+        kill_switch_blocking_new_entries: kill_switch_blocking,
+        duplicate_same_symbol_signal_blocking_enabled: !config.allow_multi_strategy_same_signal,
+        approved_strategies: APPROVED_PAPER_STRATEGIES
+            .iter()
+            .map(|strategy| ApprovedStrategyStatus {
+                version: strategy.version,
+                role: strategy.role,
+                min_score: strategy.min_score,
+            })
+            .collect(),
+        open_auto_positions,
+        latest_auto_paper_decision_timestamp,
+        latest_auto_paper_decision,
+        latest_entered_decision,
+        latest_rejected_decision,
+        latest_conflict_skipped_decision,
+        pause,
+        new_entries_blocked: !block_reasons.is_empty(),
+        new_entries_block_reasons: block_reasons,
+        current_utc_day: utc_day_text(now),
+        generated_at: now,
+    })
+}
+
+fn load_auto_paper_control_state(
+    connection: &Connection,
+    now: i64,
+) -> Result<AutoPaperPauseState, ApiError> {
+    let mut statement = connection.prepare(
+        "SELECT key, value, updated_at, note FROM auto_paper_control
+         WHERE key IN ('paused', 'pause_reason', 'paused_until')",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, Option<String>>(3)?,
+        ))
+    })?;
+    let mut values: HashMap<String, (String, i64, Option<String>)> = HashMap::new();
+    for row in rows {
+        let (key, value, updated_at, note) = row?;
+        values.insert(key, (value, updated_at, note));
+    }
+
+    let configured_paused = values
+        .get("paused")
+        .map(|(value, _, _)| value == "true" || value == "1")
+        .unwrap_or(false);
+    let paused_until = values
+        .get("paused_until")
+        .and_then(|(value, _, _)| value.parse::<i64>().ok());
+    let paused = configured_paused
+        && paused_until
+            .map(|timestamp| timestamp > now)
+            .unwrap_or(true);
+    let reason = values.get("pause_reason").and_then(|(value, _, _)| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    });
+    let updated_at = values.values().map(|(_, updated_at, _)| *updated_at).max();
+
+    Ok(AutoPaperPauseState {
+        paused,
+        configured_paused,
+        reason,
+        paused_until,
+        updated_at,
+        blocking_new_entries: paused,
+    })
+}
+
+fn set_auto_paper_paused(
+    connection: &Connection,
+    paused: bool,
+    reason: &str,
+    paused_until: Option<i64>,
+    now: i64,
+) -> Result<(), ApiError> {
+    let tx = connection.unchecked_transaction()?;
+    upsert_auto_paper_control(
+        &tx,
+        "paused",
+        if paused { "true" } else { "false" },
+        now,
+        Some(reason),
+    )?;
+    upsert_auto_paper_control(&tx, "pause_reason", reason, now, Some(reason))?;
+    upsert_auto_paper_control(
+        &tx,
+        "paused_until",
+        &paused_until
+            .map(|value| value.to_string())
+            .unwrap_or_default(),
+        now,
+        Some(reason),
+    )?;
+    tx.execute(
+        "INSERT INTO auto_paper_control_events (action, reason, paused_until, created_at)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![
+            if paused { "pause" } else { "resume" },
+            reason,
+            paused_until,
+            now
+        ],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn upsert_auto_paper_control(
+    connection: &Connection,
+    key: &str,
+    value: &str,
+    updated_at: i64,
+    note: Option<&str>,
+) -> Result<(), ApiError> {
+    connection.execute(
+        "INSERT INTO auto_paper_control (key, value, updated_at, note)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(key) DO UPDATE SET
+            value = excluded.value,
+            updated_at = excluded.updated_at,
+            note = excluded.note",
+        params![key, value, updated_at, note],
+    )?;
+    Ok(())
+}
+
+fn load_daily_realized_r(connection: &Connection, now: i64) -> Result<Option<f64>, ApiError> {
+    let day_start = utc_day_start_ms(now);
+    let (count, total): (i64, Option<f64>) = connection.query_row(
+        "SELECT COUNT(*), SUM(t.realized_pnl / d.risk_amount)
+         FROM trades t
+         JOIN auto_paper_decisions d
+           ON d.decision = 'entered'
+          AND d.trade_id IS NOT NULL
+          AND d.symbol = t.symbol
+          AND t.executed_at >= d.created_at
+          AND d.risk_amount > 0
+         WHERE t.side = 'SELL'
+           AND t.executed_at >= ?1",
+        params![day_start],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    Ok(if count > 0 {
+        Some(total.unwrap_or(0.0))
+    } else {
+        None
+    })
+}
+
+fn load_open_auto_positions(
+    connection: &Connection,
+) -> Result<Vec<AutoPaperOpenPosition>, ApiError> {
+    let rows = {
+        let mut statement = connection.prepare(
+            "SELECT symbol, quantity, avg_price, stop_loss, take_profit, note, updated_at
+             FROM positions
+             WHERE quantity > 0
+             ORDER BY symbol ASC",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, f64>(1)?,
+                row.get::<_, f64>(2)?,
+                row.get::<_, Option<f64>>(3)?,
+                row.get::<_, Option<f64>>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, i64>(6)?,
+            ))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()?
+    };
+
+    let mut positions = Vec::new();
+    for (symbol, quantity, avg_price, stop_loss, take_profit, note, updated_at) in rows {
+        if !note
+            .as_deref()
+            .map(|value| value.contains("AUTO_PAPER"))
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let current_price = load_latest_telemetry_price(connection, &symbol)?;
+        let market_value = current_price.map(|price| price * quantity);
+        let unrealized_pnl = current_price.map(|price| (price - avg_price) * quantity);
+        let open_validity = auto_paper_open_position_validity(
+            Some(avg_price),
+            current_price,
+            stop_loss,
+            take_profit,
+        );
+        positions.push(AutoPaperOpenPosition {
+            strategy_version: note.as_deref().and_then(strategy_from_auto_paper_note),
+            symbol,
+            quantity,
+            avg_price,
+            current_price,
+            market_value,
+            unrealized_pnl,
+            stop_loss,
+            take_profit,
+            note,
+            open_validity,
+            updated_at,
+        });
+    }
+    Ok(positions)
+}
+
+fn load_latest_telemetry_price(
+    connection: &Connection,
+    symbol: &str,
+) -> Result<Option<f64>, ApiError> {
+    connection
+        .query_row(
+            "SELECT last_price FROM telemetry_market_tickers
+             WHERE symbol = ?1
+             ORDER BY snapshot_time DESC
+             LIMIT 1",
+            params![symbol],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(ApiError::from)
+}
+
+fn strategy_from_auto_paper_note(note: &str) -> Option<String> {
+    let marker = "AUTO_PAPER ";
+    let start = note.find(marker)? + marker.len();
+    note[start..]
+        .split_whitespace()
+        .next()
+        .map(|value| value.trim_matches('|').to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn auto_paper_open_position_validity(
+    entry: Option<f64>,
+    current: Option<f64>,
+    stop_loss: Option<f64>,
+    take_profit: Option<f64>,
+) -> String {
+    let Some(current) = current else {
+        return "unknown_no_current_price".to_string();
+    };
+    if stop_loss.map(|stop| current <= stop).unwrap_or(false) {
+        return "degraded_below_stop".to_string();
+    }
+    if take_profit
+        .map(|take_profit| current >= take_profit)
+        .unwrap_or(false)
+    {
+        return "at_or_above_take_profit".to_string();
+    }
+    if entry.map(|entry| current < entry).unwrap_or(false) {
+        return "degraded_below_entry".to_string();
+    }
+    if let (Some(entry), Some(stop_loss)) = (entry, stop_loss) {
+        if entry > stop_loss {
+            let near_stop = stop_loss + (entry - stop_loss) * 0.25;
+            if current <= near_stop {
+                return "near_stop".to_string();
+            }
+        }
+    }
+    "valid".to_string()
+}
+
+fn load_latest_auto_paper_decision(
+    connection: &Connection,
+    decision: Option<&str>,
+) -> Result<Option<AutoPaperDecisionSnapshot>, ApiError> {
+    let select = "SELECT id, strategy_version, symbol, signal_close_time, decision, reason,
+            ai_score, stage, technical_stage, final_stage, created_at, trade_id, context_json
+         FROM auto_paper_decisions";
+    let order = "ORDER BY created_at DESC, id DESC LIMIT 1";
+    match decision {
+        Some(decision) => connection
+            .query_row(
+                &format!("{select} WHERE decision = ?1 {order}"),
+                params![decision],
+                auto_paper_decision_from_row,
+            )
+            .optional()
+            .map_err(ApiError::from),
+        None => connection
+            .query_row(
+                &format!("{select} {order}"),
+                [],
+                auto_paper_decision_from_row,
+            )
+            .optional()
+            .map_err(ApiError::from),
+    }
+}
+
+fn auto_paper_decision_from_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<AutoPaperDecisionSnapshot> {
+    let context_raw: Option<String> = row.get(12)?;
+    let context = context_raw.and_then(|raw| serde_json::from_str(&raw).ok());
+    Ok(AutoPaperDecisionSnapshot {
+        id: row.get(0)?,
+        strategy_version: row.get(1)?,
+        symbol: row.get(2)?,
+        signal_close_time: row.get(3)?,
+        decision: row.get(4)?,
+        reason: row.get(5)?,
+        ai_score: row.get(6)?,
+        stage: row.get(7)?,
+        technical_stage: row.get(8)?,
+        final_stage: row.get(9)?,
+        created_at: row.get(10)?,
+        trade_id: row.get(11)?,
+        context,
+    })
+}
+
 async fn run_auto_paper_cycle(state: &AppState) -> Result<(), ApiError> {
     if !state.auto_paper.enabled {
         return Ok(());
@@ -1785,6 +2316,26 @@ async fn run_auto_paper_cycle(state: &AppState) -> Result<(), ApiError> {
         process_price_events(&mut db, &prices, now)?;
         load_auto_paper_cycle_stats(&db, now)?
     };
+    let pause_state = {
+        let db = state
+            .db
+            .lock()
+            .map_err(|_| ApiError::internal("Paper database lock is poisoned."))?;
+        load_auto_paper_control_state(&db, now)?
+    };
+
+    if pause_state.blocking_new_entries {
+        log_paused_auto_paper_ready_signals(
+            state,
+            &prices,
+            stats.cash_balance,
+            stats.fee_bps,
+            now,
+            &pause_state,
+        )
+        .await?;
+        return Ok(());
+    }
 
     if auto_paper_caps_blocked(&state.auto_paper, &stats) {
         return Ok(());
@@ -1940,6 +2491,54 @@ async fn run_auto_paper_cycle(state: &AppState) -> Result<(), ApiError> {
     Ok(())
 }
 
+async fn log_paused_auto_paper_ready_signals(
+    state: &AppState,
+    prices: &HashMap<String, f64>,
+    cash_balance: f64,
+    fee_bps: f64,
+    now: i64,
+    pause_state: &AutoPaperPauseState,
+) -> Result<(), ApiError> {
+    let reason = pause_state
+        .reason
+        .as_deref()
+        .unwrap_or("auto-paper is paused");
+    let reason = format!("paused_blocked: {reason}");
+    for symbol in state
+        .watchlist
+        .iter()
+        .filter(|symbol| symbol.as_str() != BTC_REFERENCE_SYMBOL)
+    {
+        let Some(current_price) = prices.get(symbol).copied() else {
+            continue;
+        };
+        let signals = build_signal_assistants(
+            &state.client,
+            &state.news_cache,
+            &state.watchlist,
+            symbol,
+            current_price,
+            cash_balance,
+            fee_bps,
+            now,
+            APPROVED_PAPER_STRATEGIES,
+        )
+        .await?;
+        persist_signal_evaluations_if_enabled(state, &signals, now);
+        let db = state
+            .db
+            .lock()
+            .map_err(|_| ApiError::internal("Paper database lock is poisoned."))?;
+        for signal in signals
+            .iter()
+            .filter(|signal| matches!(signal.technical_stage, SignalStage::Ready))
+        {
+            insert_auto_paper_decision(&db, signal, "paused_blocked", Some(&reason), now)?;
+        }
+    }
+    Ok(())
+}
+
 fn auto_paper_caps_blocked(config: &AutoPaperConfig, stats: &AutoPaperCycleStats) -> bool {
     if stats.active_slots >= config.max_open_slots {
         return true;
@@ -2077,10 +2676,82 @@ fn has_auto_paper_symbol_signal_conflict(
            AND signal_close_time = ?2
            AND strategy_version != ?3
            AND decision IN ('entry_attempt', 'entered')",
-        params![&signal.symbol, signal.signal_close_time, signal.strategy_version],
+        params![
+            &signal.symbol,
+            signal.signal_close_time,
+            signal.strategy_version
+        ],
         |row| row.get(0),
     )?;
     Ok(count > 0)
+}
+
+fn signal_failed_checks(signal: &SignalAssistant) -> Vec<String> {
+    signal
+        .checklist
+        .iter()
+        .filter(|check| !check.passed)
+        .map(|check| check.label.clone())
+        .collect()
+}
+
+fn auto_paper_decision_context_json(
+    signal: &SignalAssistant,
+    decision: &str,
+    reason: Option<&str>,
+) -> Result<String, ApiError> {
+    let failed_checks = signal_failed_checks(signal);
+    let news_gate_status = signal
+        .checklist
+        .iter()
+        .find(|check| check.label.to_ascii_lowercase().contains("news"))
+        .map(|check| {
+            serde_json::json!({
+                "passed": check.passed,
+                "detail": check.detail,
+            })
+        });
+    let risk_plan = signal.risk_plan.as_ref().map(|plan| {
+        serde_json::json!({
+            "entry": plan.entry,
+            "stop_loss": plan.stop_loss,
+            "take_profit_1": plan.take_profit_1,
+            "take_profit_2": plan.take_profit_2,
+            "suggested_quantity": plan.suggested_quantity,
+            "risk_per_unit": plan.risk_per_unit,
+            "risk_amount": plan.risk_amount,
+            "notional_estimate": plan.notional_estimate,
+            "capital_at_risk_percent": plan.capital_at_risk_percent,
+        })
+    });
+    let context = serde_json::json!({
+        "strategy_version": signal.strategy_version,
+        "symbol": &signal.symbol,
+        "signal_close_time": signal.signal_close_time,
+        "technical_stage": signal.technical_stage.as_label(),
+        "final_stage": signal.stage.as_label(),
+        "ai_score": signal.ai_score,
+        "failed_checks": failed_checks,
+        "blocker_summary": reason,
+        "session_bucket": session_bucket(signal.signal_close_time),
+        "btc_24h_return": serde_json::Value::Null,
+        "basket_breadth": serde_json::Value::Null,
+        "relative_strength_percentile": serde_json::Value::Null,
+        "funding_bps": serde_json::Value::Null,
+        "taker_buy_sell_ratio": serde_json::Value::Null,
+        "global_account_long_short_ratio": serde_json::Value::Null,
+        "top_trader_position_ratio": serde_json::Value::Null,
+        "oi_24h_change": serde_json::Value::Null,
+        "news_gate_status": news_gate_status,
+        "duplicate_conflict_reason": if decision == "conflict_skipped" { reason } else { None },
+        "risk_plan": risk_plan,
+        "checklist": &signal.checklist,
+        "warnings": &signal.warnings,
+        "journal_tags": &signal.journal_tags,
+        "generated_at": signal.generated_at,
+        "decision_logged_at": Utc::now().timestamp_millis(),
+    });
+    to_json_string(&context)
 }
 
 fn insert_auto_paper_decision(
@@ -2090,11 +2761,12 @@ fn insert_auto_paper_decision(
     reason: Option<&str>,
     created_at: i64,
 ) -> Result<bool, ApiError> {
+    let context_json = auto_paper_decision_context_json(signal, decision, reason)?;
     let changed = connection.execute(
         "INSERT OR IGNORE INTO auto_paper_decisions (
             strategy_version, symbol, signal_close_time, decision, reason,
-            ai_score, stage, created_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            ai_score, stage, created_at, technical_stage, final_stage, context_json
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             signal.strategy_version,
             &signal.symbol,
@@ -2103,7 +2775,10 @@ fn insert_auto_paper_decision(
             reason,
             signal.ai_score,
             signal.stage.as_label(),
-            created_at
+            created_at,
+            signal.technical_stage.as_label(),
+            signal.stage.as_label(),
+            context_json
         ],
     )?;
     Ok(changed > 0)
@@ -2118,6 +2793,7 @@ fn insert_auto_paper_entry_attempt(
         return Ok(true);
     }
 
+    let context_json = auto_paper_decision_context_json(signal, "entry_attempt", None)?;
     let changed = connection.execute(
         "UPDATE auto_paper_decisions
          SET decision = 'entry_attempt',
@@ -2131,18 +2807,24 @@ fn insert_auto_paper_entry_attempt(
              take_profit = NULL,
              quantity = NULL,
              risk_per_unit = NULL,
-             risk_amount = NULL
+             risk_amount = NULL,
+             technical_stage = ?7,
+             final_stage = ?8,
+             context_json = ?9
          WHERE strategy_version = ?4
            AND symbol = ?5
            AND signal_close_time = ?6
-           AND decision = 'rejected'",
+           AND decision IN ('rejected', 'paused_blocked')",
         params![
             signal.ai_score,
             signal.stage.as_label(),
             created_at,
             signal.strategy_version,
             &signal.symbol,
-            signal.signal_close_time
+            signal.signal_close_time,
+            signal.technical_stage.as_label(),
+            signal.stage.as_label(),
+            context_json
         ],
     )?;
     Ok(changed > 0)
@@ -2169,6 +2851,7 @@ fn update_auto_paper_decision_trade(
     risk_plan: &SignalRiskPlan,
 ) -> Result<(), ApiError> {
     let risk_amount = trade.quantity * risk_plan.risk_per_unit;
+    let context_json = auto_paper_decision_context_json(signal, "entered", None)?;
     connection.execute(
         "UPDATE auto_paper_decisions
          SET decision = 'entered',
@@ -2178,7 +2861,10 @@ fn update_auto_paper_decision_trade(
              take_profit = ?4,
              quantity = ?5,
              risk_per_unit = ?6,
-             risk_amount = ?7
+             risk_amount = ?7,
+             technical_stage = ?11,
+             final_stage = ?12,
+             context_json = ?13
          WHERE strategy_version = ?8 AND symbol = ?9 AND signal_close_time = ?10",
         params![
             trade.id,
@@ -2190,7 +2876,10 @@ fn update_auto_paper_decision_trade(
             risk_amount,
             signal.strategy_version,
             &signal.symbol,
-            signal.signal_close_time
+            signal.signal_close_time,
+            signal.technical_stage.as_label(),
+            signal.stage.as_label(),
+            context_json
         ],
     )?;
     Ok(())
@@ -2201,15 +2890,23 @@ fn update_auto_paper_decision_failure(
     signal: &SignalAssistant,
     reason: &str,
 ) -> Result<(), ApiError> {
+    let context_json = auto_paper_decision_context_json(signal, "failed", Some(reason))?;
     connection.execute(
         "UPDATE auto_paper_decisions
-         SET decision = 'failed', reason = ?1
+         SET decision = 'failed',
+             reason = ?1,
+             technical_stage = ?5,
+             final_stage = ?6,
+             context_json = ?7
          WHERE strategy_version = ?2 AND symbol = ?3 AND signal_close_time = ?4",
         params![
             reason,
             signal.strategy_version,
             &signal.symbol,
-            signal.signal_close_time
+            signal.signal_close_time,
+            signal.technical_stage.as_label(),
+            signal.stage.as_label(),
+            context_json
         ],
     )?;
     Ok(())
@@ -3984,6 +4681,12 @@ fn format_utc_time(timestamp_ms: i64) -> String {
     DateTime::<Utc>::from_timestamp_millis(timestamp_ms)
         .map(|timestamp| timestamp.format("%H:%M UTC").to_string())
         .unwrap_or_else(|| "unknown UTC".to_string())
+}
+
+fn utc_day_text(timestamp_ms: i64) -> String {
+    DateTime::<Utc>::from_timestamp_millis(timestamp_ms)
+        .map(|timestamp| timestamp.date_naive().to_string())
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 fn utc_day_start_ms(timestamp_ms: i64) -> i64 {

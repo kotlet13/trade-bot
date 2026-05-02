@@ -29,7 +29,7 @@ docker compose up -d --build
 
 Container ima nastavljen `restart: unless-stopped`, zato se po ponovnem zagonu Docker engine-a znova zazene, dokler ga ne ustavis z `docker compose stop` ali `docker compose down`.
 
-Compose zazene tudi `news-events` research sidecar. Ta vsakih 15 minut osvezi public RSS event archive in lokalne diagnosticne reporte, vendar ne klice trading API-jev in ne oddaja paper orderjev.
+Compose zazene tudi `news-events` research sidecar in read-only `paper-diagnostics` sidecar. `news-events` vsakih 15 minut osvezi public RSS event archive. `paper-diagnostics` privzeto vsakih 6 ur osvezi paper/telemetry/parity reporte pod `tmp/`. Noben sidecar ne klice `/api/paper/*` endpointov in noben ne oddaja paper ali live orderjev.
 
 ## Kaj zna danes
 
@@ -58,6 +58,8 @@ Compose zazene tudi `news-events` research sidecar. Ta vsakih 15 minut osvezi pu
 - guarded auto-paper worker: v `docker-compose.yml` vklopljen za odobren gated paper test, ena globalna auto pozicija naenkrat, najvec 3 auto entryji na UTC dan, 2% dnevni realized-loss kill switch
     - oba paper bota uporabljata isti lokalni SQLite paper executor in isti globalni slot
     - duplicate same-symbol/same-signal entries across primary and secondary are blocked unless explicitly enabled
+    - local DB-backed pause/resume control can block new auto entries without editing Compose
+    - status endpoint and dashboard surface show paper-only bot state, latest decisions, kill switch state, and open auto positions
 - virtualni cash, pozicije, odprti orderji in PnL
 - trade log z notes in lokalno persistenco v SQLite
 - runtime telemetry archive v SQLite: recent tickerji, `1m/15m/1h/4h` svecke, USD-M funding, futures positioning metric rows, in `SignalAssistant` scorecard snapshots
@@ -80,9 +82,15 @@ Trenutni backend endpointi:
 
 - `GET /health`
 - `GET /api/dashboard`
-  - vrne tudi `signal_assistant` in `secondary_signal_assistants` za izbrani simbol
+  - vrne tudi `signal_assistant`, `secondary_signal_assistants`, in `auto_paper_status` za izbrani simbol
 - `GET /api/replay`
   - vrne zgodovinski replay signal assistant logike za izbrani simbol
+- `GET /api/auto-paper/status`
+  - read-only status for guarded local paper entries; ne odda, preklice, ali resetira orderjev
+- `POST /api/auto-paper/pause`
+  - DB-backed local pause for new auto-paper entries only; existing paper positions keep normal local stop/TP handling
+- `POST /api/auto-paper/resume`
+  - removes the local pause; it does not force trades
 - `POST /api/paper/orders`
 - `POST /api/paper/orders/:id/cancel`
 - `POST /api/paper/reset`
@@ -113,6 +121,10 @@ Okoljske spremenljivke:
 - `NEWS_EVENT_COLLECTOR_LIMIT_PER_SOURCE=50`
 - `NEWS_EVENT_IMPACT_SINCE_HOURS=168`
 - `NEWS_EVENT_MARKET_MEMORY_SINCE_HOURS=168`
+- `PAPER_DIAGNOSTICS_INTERVAL_SECONDS=21600`
+- `PAPER_DIAGNOSTICS_SINCE_HOURS=24`
+- `PAPER_DIAGNOSTICS_BASE_URL=http://app:3000`
+- `PAPER_DIAGNOSTICS_SYMBOLS=ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT`
 
 Docker Compose mapira `8081:3000`, zato je aplikacija lokalno dosegljiva na `http://localhost:8081`.
 
@@ -122,13 +134,33 @@ Forward paper report:
 python scripts/forward_paper_report.py --markdown-out tmp/forward_paper_report_latest.md --json-out tmp/forward_paper_report_latest.json
 ```
 
+The report includes a campaign-status section with `sample_too_small`, warning, and analysis-only recommendation fields. It never marks the bot live-ready and does not change settings.
+
 Daily paper diagnostics:
 
 ```bash
 python scripts/daily_paper_diagnostics.py
 ```
 
-This orchestrates the forward paper report, runtime telemetry report, runtime/harness parity for both active strategies, and the optional market-memory report when the DB has the required telemetry. It is read-only and does not call `/api/paper/*`.
+This orchestrates the forward paper report, auto-paper status fetch, runtime telemetry report, runtime/harness parity for both active strategies, and the optional market-memory report when the DB has the required telemetry. It is read-only and does not call `/api/paper/*`.
+
+Append the local campaign journal:
+
+```bash
+python scripts/paper_campaign_log.py --note "daily check"
+```
+
+Compare active paper bots:
+
+```bash
+python scripts/strategy_forward_compare.py --markdown-out tmp/strategy_forward_compare_latest.md --json-out tmp/strategy_forward_compare_latest.json
+```
+
+Back up the local paper DB:
+
+```bash
+python scripts/backup_paper_db.py --keep-last 10
+```
 
 Runtime telemetry report:
 
@@ -184,6 +216,22 @@ Runtime/harness parity check:
 ```bash
 python scripts/runtime_harness_parity.py --strategy ai_score_v2_base_score7 --symbols ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT --markdown-out tmp/runtime_harness_parity_base_latest.md --json-out tmp/runtime_harness_parity_base_latest.json
 python scripts/runtime_harness_parity.py --strategy ai_score_v2_ablate_oi --symbols ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT --markdown-out tmp/runtime_harness_parity_oi_latest.md --json-out tmp/runtime_harness_parity_oi_latest.json
+```
+
+Recommended daily workflow while background guarded paper testing is enabled:
+
+```bash
+docker compose up -d --build
+python scripts/daily_paper_diagnostics.py
+python scripts/paper_campaign_log.py --note "daily check"
+```
+
+Recommended weekly workflow:
+
+```bash
+python scripts/strategy_forward_compare.py --markdown-out tmp/strategy_forward_compare_latest.md --json-out tmp/strategy_forward_compare_latest.json
+python scripts/candidate_diagnostics.py --candidate-name regime_abs_oi_funding_not_panic_s7 --candidate-name rs_refine_htf_position_loose_s5 --source-artifact tmp/research_runs/relative_strength_refinement_universe30_20260501.json --universe-limit 30 --json-out tmp/research_runs/candidate_diagnostics_latest.json --markdown-out tmp/research_runs/candidate_diagnostics_latest.md
+python scripts/backup_paper_db.py --keep-last 10
 ```
 
 Scorecard ablation research:

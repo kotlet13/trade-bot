@@ -95,6 +95,63 @@ def create_fixture(path: Path) -> None:
         )
 
 
+def create_empty_fixture(path: Path) -> None:
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE auto_paper_decisions (
+                id INTEGER PRIMARY KEY,
+                strategy_version TEXT,
+                symbol TEXT,
+                signal_close_time INTEGER,
+                decision TEXT,
+                reason TEXT,
+                ai_score INTEGER,
+                stage TEXT,
+                created_at INTEGER,
+                trade_id INTEGER,
+                entry_price REAL,
+                stop_loss REAL,
+                take_profit REAL,
+                quantity REAL,
+                risk_per_unit REAL,
+                risk_amount REAL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE trades (
+                id INTEGER PRIMARY KEY,
+                symbol TEXT,
+                side TEXT,
+                quantity REAL,
+                price REAL,
+                gross_value REAL,
+                fee_paid REAL,
+                realized_pnl REAL,
+                note TEXT,
+                source TEXT,
+                source_order_id INTEGER,
+                executed_at INTEGER
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE positions (
+                symbol TEXT,
+                quantity REAL,
+                avg_price REAL,
+                stop_loss REAL,
+                take_profit REAL,
+                note TEXT,
+                updated_at INTEGER
+            )
+            """
+        )
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as raw_dir:
         db_path = Path(raw_dir) / "paper.db"
@@ -108,12 +165,26 @@ def main() -> int:
         assert summary["rejection_blockers"]["Score funding"] == 1
         assert summary["rejection_blockers"]["AI score v2"] == 1
         assert summary["grouped_stats"]["by_strategy"]["ai_score_v2_base_score7"]["count"] == 1
+        assert "sample_too_small" in summary["campaign_status"]
+        assert "promotion_not_allowed" in summary["campaign_status"]
+        assert summary["recommended_action"] == "insufficient_sample"
+        assert summary["per_strategy_campaign"]["ai_score_v2_base_score7"]["completed_trades"] == 1
         assert report.session_bucket(int(datetime(2026, 5, 1, 15, 30, tzinfo=UTC).timestamp() * 1000)) == "london_ny_overlap"
         assert report.session_bucket(int(datetime(2026, 5, 1, 16, 0, tzinfo=UTC).timestamp() * 1000)) == "new_york"
         markdown = report.render_markdown(summary, decisions)
         assert "Forward Paper Report" in markdown
+        assert "Campaign Status" in markdown
         assert "ETHUSDT" in markdown
-    print("ok - 1 forward paper report test passed")
+        empty_db_path = Path(raw_dir) / "empty.db"
+        create_empty_fixture(empty_db_path)
+        empty_decisions, empty_trades, empty_positions = report.load_forward_data(empty_db_path)
+        empty_summary = report.summarize(empty_decisions, empty_trades, empty_positions)
+        assert empty_summary["completed_trades"] == 0
+        assert empty_summary["recommended_action"] == "insufficient_sample"
+        assert "sample_too_small" in empty_summary["campaign_status"]
+        empty_markdown = report.render_markdown(empty_summary, empty_decisions)
+        assert "No decisions yet." in empty_markdown
+    print("ok - 2 forward paper report tests passed")
     return 0
 
 

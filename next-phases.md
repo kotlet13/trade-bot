@@ -1,523 +1,583 @@
-You are working on the `trade-bot` repository. Continue development based on the current project direction: this is a crypto research and paper-trading bot, not a live trading system.
+Spodaj imaš nova navodila za Codex. Napisana so v angleščini in upoštevajo, da **guarded auto-paper ostane vklopljen v ozadju**.
+
+````text
+You are working on the `trade-bot` repository.
+
+The project is now in an approved guarded forward-paper phase. Auto-paper trading is intentionally enabled in `docker-compose.yml` for local SQLite paper entries only. Do not disable it as part of this work. The goal is to make the background paper test safer, more observable, and more useful for decision-making.
 
 Hard rules:
 - Do not add live Binance execution.
-- Do not add private API key handling for live funds.
+- Do not add real exchange order placement.
+- Do not add live-funds API key handling.
+- Do not add testnet/live execution unless explicitly requested later.
 - Do not promote any new strategy into runtime paper trading unless it passes the documented promotion gates and the user explicitly approves it.
-- Preserve the paper-only boundary.
-- Preserve existing user changes.
-- Do not commit runtime state, local DB files, caches, compiled files, or temporary research artifacts unless explicitly asked.
+- Keep `ai_score_v2_base_score7` as the primary control paper strategy.
+- Keep `ai_score_v2_ablate_oi` as the secondary paper strategy.
+- Keep `AUTO_PAPER_TRADING=true` in `docker-compose.yml`; this is intentional for the current guarded forward-paper test.
+- Do not force trades.
+- Do not reset the paper account unless explicitly asked.
+- Do not commit local runtime state, DB files, caches, compiled artifacts, or generated research artifacts unless explicitly asked.
+- Preserve user changes.
 - Read and follow `AGENTS.md` before editing.
-- Prefer small, testable changes over large rewrites.
 
-Current project context:
-- Active paper strategies are:
-  - `ai_score_v2_base_score7`
-  - `ai_score_v2_ablate_oi`
-- Both must remain guarded paper-only strategies.
-- `ai_score_v2_ablate_oi` should stay as the secondary strategy and `ai_score_v2_base_score7` should stay as the control strategy.
-- The strongest next research path is relative-strength HTF continuation / refinement.
-- The main weakness is not lack of more entry rules; it is regime selection, fill realism, runtime/harness parity, and forward-paper validation.
-- Do not keep randomly tightening reclaim rules just to find a backtest pass.
+Current project state:
+- Mode: local guarded paper testing plus ongoing research.
+- Auto-paper is enabled in Compose for local SQLite paper ledger entries.
+- Execution remains paper-only.
+- Active paper strategies:
+  - Primary: `ai_score_v2_base_score7`
+  - Secondary: `ai_score_v2_ablate_oi`
+- Auto-paper guardrails:
+  - one global auto slot
+  - max 3 auto entries per UTC day
+  - 2% daily realized-loss kill switch
+  - no BTC entries
+  - no duplicate same-strategy same-symbol same-signal entries
+  - no duplicate same-symbol same-signal entries across primary/secondary unless explicitly allowed
+- Runtime paper exits currently use single full-position attached stop-loss / TP1.
+- Research harness contains stricter/slippage-aware and runtime-exit-parity tooling.
+- Near-miss research candidates are not promoted:
+  - `regime_abs_oi_funding_not_panic_s7` is promising but too sparse and strict-fill sensitive.
+  - `rs_refine_htf_position_loose_s5` remains holdout-skewed and fold-unstable.
 
-Primary goals:
-1. Make paper trading safer by default.
-2. Improve forward-paper diagnostics.
-3. Enforce runtime/harness parity checks.
-4. Improve fill/slippage realism in the research harness.
-5. Align runtime paper exits with research exits.
-6. Add or improve regime-abstention research.
-7. Continue focused research on relative-strength continuation/refinement.
-8. Keep all new candidates harness-only until promotion gates pass.
+Main objective for this development pass:
+Build a stronger forward-paper operations layer around the already-enabled background paper bot. The bot may keep running, but the system must become easier to monitor, pause, audit, export, and judge.
 
 ---
 
-## Phase 1: Safer default runtime config
+## Phase 1: Add an auto-paper runtime status surface
 
-Change `docker-compose.yml` so auto-paper trading is disabled by default:
+Add a read-only API endpoint that exposes the current auto-paper status.
 
-- Set:
-  - `AUTO_PAPER_TRADING: "false"`
+Suggested endpoint:
 
-Do not remove the feature. The user should still be able to enable it manually by changing the env var.
+- `GET /api/auto-paper/status`
 
-Update docs where needed:
-- `README.md`
-- `docs/active-strategy.md`
-- `docs/architecture-ops.md`
+It should return:
+- whether auto-paper is enabled by config
+- max open slots
+- current active auto slots
+- max daily entries
+- current daily entries
+- daily realized PnL
+- daily realized R if available
+- daily loss kill-switch threshold
+- whether kill switch is currently blocking new entries
+- whether duplicate same-symbol/same-signal blocking is enabled
+- current approved strategy list
+- open auto positions
+- latest auto-paper decision timestamp
+- latest entered decision
+- latest rejected decision
+- latest conflict-skipped decision
+- current UTC day
+- generated_at
 
-Make the docs clear:
-- Auto-paper exists.
-- It is guarded.
-- It is local SQLite paper-only.
-- It is disabled by default unless explicitly enabled.
+This endpoint must be read-only.
+It must not place, cancel, or reset paper orders.
+
+Also add this status into the existing `/api/dashboard` payload if that is low-risk. If that is too invasive, keep it as a separate endpoint first.
 
 Acceptance:
-- `docker compose up --build` still works.
-- The app still serves normally.
-- Auto-paper worker should not start unless `AUTO_PAPER_TRADING=true`.
+- `GET /api/auto-paper/status` works when there are no decisions yet.
+- It works when there are no open positions.
+- It works when the `auto_paper_decisions` table exists but is empty.
+- It does not mutate DB state.
+- Add docs in `README.md` and `docs/architecture-ops.md`.
 
 ---
 
-## Phase 2: Improve forward-paper reporting
+## Phase 2: Add manual local pause/resume for auto-paper without changing Compose
 
-Improve `scripts/forward_paper_report.py`.
+Because `AUTO_PAPER_TRADING=true` is intentional, add a local pause layer so the user can stop new paper entries without editing Docker Compose.
 
-Current report is useful, but expand it so it can answer:
+Implement a persistent DB-backed pause flag.
 
-- Which strategy is doing better forward:
-  - `ai_score_v2_base_score7`
-  - `ai_score_v2_ablate_oi`
-- Which symbols are profitable or weak.
-- Which sessions perform best:
-  - London
-  - London/New York overlap
-  - New York
-  - off-hours
-- Which blockers reject most technical-ready setups.
-- Whether rejected setups later would have worked, if enough telemetry exists.
-- Whether open positions are still valid or have degraded.
-- Whether the bot is mostly flat because no signals occur or because gates reject signals.
+Suggested table:
 
-Add grouped statistics:
-- by strategy
-- by symbol
-- by session bucket
-- by day
-- by outcome
-- by rejection blocker
-- by strategy + blocker
-- by symbol + blocker
-
-For completed auto trades, include:
-- count
-- total realized PnL
-- total realized R
-- average R
-- median R
-- win rate
-- max win R
-- max loss R
-- simple equity curve in R
-- max drawdown in R
-
-For open auto trades, include:
-- opened time
-- strategy
-- symbol
-- entry
-- current price if available
-- stop
-- take profit
-- unrealized PnL if available
-- approximate unrealized R if risk amount is available
-
-Add CLI options:
-- `--since-hours`
-- `--strategy`
-- `--symbol`
-- `--json`
-- `--markdown-out`
-- `--json-out`
-
-Keep backward compatibility with existing options.
-
-Acceptance:
-- Existing command still works:
-
-  `python scripts/forward_paper_report.py --markdown-out tmp/forward_paper_report_latest.md --json-out tmp/forward_paper_report_latest.json`
-
-- If there are no trades or no decisions, the script should still render a useful report and not crash.
-- Add or update tests if there is already a relevant test pattern.
-- Do not require live internet for this report.
-
----
-
-## Phase 3: Add a daily diagnostics command/script
-
-Create a small script, for example:
-
-- `scripts/daily_paper_diagnostics.py`
-
-It should run or orchestrate these diagnostics:
-
-1. Forward paper report.
-2. Runtime telemetry report, if available.
-3. Runtime/harness parity for both active strategies.
-4. Optional market-memory report, if the DB contains required telemetry.
-
-The script should write outputs under `tmp/`:
-
-- `tmp/forward_paper_report_latest.md`
-- `tmp/forward_paper_report_latest.json`
-- `tmp/runtime_harness_parity_base_latest.md`
-- `tmp/runtime_harness_parity_base_latest.json`
-- `tmp/runtime_harness_parity_oi_latest.md`
-- `tmp/runtime_harness_parity_oi_latest.json`
-- any other already-standard latest report names
-
-It should not place trades.
-It should not call `/api/paper/*`.
-It should only inspect data and produce reports.
-
-Acceptance:
-- If the app is not running, the script should fail gracefully and explain which parity checks could not run.
-- If the DB does not exist, the script should fail gracefully.
-- If one report fails, the script should continue with the others and summarize failures at the end.
-
----
-
-## Phase 4: Strengthen runtime/harness parity workflow
-
-Keep `scripts/runtime_harness_parity.py`, but improve reliability if needed.
-
-Requirements:
-- It must support both active strategies:
-  - `ai_score_v2_base_score7`
-  - `ai_score_v2_ablate_oi`
-- It should clearly identify:
-  - technical stage mismatch
-  - AI score mismatch
-  - risk-plan mismatch
-  - signal close time mismatch
-  - missing futures/funding data mismatch
-  - news gate mismatch, if runtime includes news but harness does not
-
-Add a clear markdown summary:
-- number of symbols checked
-- pass count
-- warning count
-- strategy checked
-- rows with mismatches
-- exact reason for mismatch
-
-Add/keep commands in docs:
-
-```powershell
-python scripts\runtime_harness_parity.py --strategy ai_score_v2_base_score7 --symbols ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT --markdown-out tmp\runtime_harness_parity_base_latest.md --json-out tmp\runtime_harness_parity_base_latest.json
-
-python scripts\runtime_harness_parity.py --strategy ai_score_v2_ablate_oi --symbols ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT --markdown-out tmp\runtime_harness_parity_oi_latest.md --json-out tmp\runtime_harness_parity_oi_latest.json
+```sql
+auto_paper_control (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    note TEXT
+)
 ````
 
+Suggested keys:
+
+* `paused`
+* `pause_reason`
+* `paused_until`
+
+Add endpoints:
+
+* `GET /api/auto-paper/status`
+
+  * include pause state
+* `POST /api/auto-paper/pause`
+
+  * payload: `{ "reason": "...", "paused_until": optional timestamp }`
+* `POST /api/auto-paper/resume`
+
+  * payload: `{ "reason": "..." }`
+
+Behavior:
+
+* If paused, auto-paper worker must not open new entries.
+* Existing paper positions should still be managed by normal local price-trigger exits.
+* Pausing must not cancel positions.
+* Pausing must not alter research telemetry.
+* Resume must only allow new entries again; it must not force trades.
+
+Log pause/resume actions in a table or in `auto_paper_decisions` as operational events if appropriate.
+
 Acceptance:
 
-* Parity script exits `0` only if there are no warnings.
-* It produces useful markdown even when warnings exist.
-* It does not mutate paper state.
+* Paused auto-paper logs or reports why new entries are blocked.
+* Resume restores normal gated paper behavior.
+* The pause state survives container restart because it is stored in SQLite.
+* Docs clearly state this is paper-only and does not affect live funds.
 
 ---
 
-## Phase 5: Improve fill/slippage realism in the research harness
+## Phase 3: Improve forward-paper report with campaign-level decision rules
 
-Improve `scripts/research_harness.py` and/or `scripts/strategy_study.py` so research can optionally simulate more realistic fills.
+Improve `scripts/forward_paper_report.py` so it produces a clear “campaign status” section.
 
-Add configurable slippage settings:
+Add campaign-level status:
 
-* market entry slippage bps
-* stop-loss slippage bps
-* take-profit slippage bps or touch-buffer
-* optional per-symbol liquidity bucket multiplier
-* optional volatility multiplier
+* `sample_too_small`
+* `healthy_observation`
+* `warning_drawdown`
+* `warning_parity_missing`
+* `warning_strategy_underperforming`
+* `pause_recommended`
+* `promotion_not_allowed`
+* `research_only`
 
-Suggested defaults for research-only stricter mode:
+Do not ever say “live ready”.
 
-* entry market slippage: 2 bps for BTC/ETH, 3 bps for liquid large caps, 5 bps for smaller alts
-* stop slippage: 5 bps base, higher during high ATR expansion
-* take-profit: require price to clear the TP by a small buffer or apply conservative TP fill slippage
-* keep existing 10 bps fee model unless explicitly changed
+Add configurable thresholds:
 
-Add CLI args:
+* `--min-observation-trades`, default `30`
+* `--min-serious-sample-trades`, default `60`
+* `--promotion-like-sample-trades`, default `80`
+* `--max-forward-drawdown-r`, default `5.0`
+* `--min-forward-avg-r`, default `0.05`
+* `--min-forward-profit-factor`, default `1.15`
 
-* `--entry-slippage-bps`
-* `--stop-slippage-bps`
-* `--tp-slippage-bps`
-* `--strict-fills`
-* `--no-slippage`, defaulting to existing behavior if needed for backward compatibility
+Add per-strategy campaign summary:
+
+* completed trades
+* open trades
+* realized R
+* average R
+* median R
+* win rate
+* profit factor
+* max drawdown R
+* worst symbol
+* best symbol
+* worst session
+* best session
+* most common blocker
+* whether sample is too small
+
+Add a “Recommended action” field:
+
+* `keep_observing`
+* `pause_and_review`
+* `do_not_promote`
+* `insufficient_sample`
+* `check_parity`
+* `investigate_session_or_symbol_drag`
 
 Important:
 
-* Do not break existing saved research logic by silently changing defaults.
-* Either keep old defaults and add strict mode, or document the change clearly.
-* Prefer adding strict mode first.
+* This is an analysis recommendation only.
+* It must not pause the bot automatically.
+* It must not change strategy settings.
 
 Acceptance:
 
-* Existing tests still pass.
-* Add tests for:
-
-  * slippage reduces net R
-  * same-candle stop/TP remains conservative
-  * strict TP fill is harder than old TP fill
-  * stop slippage worsens stop-loss trades
-* Research artifact should include fill/slippage settings in `settings`.
-
----
-
-## Phase 6: Align runtime paper exit model with research exit model
-
-Audit mismatch between research exits and runtime paper exits.
-
-Research currently models variants like:
-
-* TP1
-* move remainder to break-even
-* TP2
-* timeout
-
-Runtime paper execution appears simpler, with attached stop-loss and take-profit on a position.
-
-Do one of these, in order of preference:
-
-Option A, preferred:
-Implement paper-only bracket/partial exits:
-
-* On entry, store:
-
-  * stop_loss
-  * take_profit_1
-  * take_profit_2
-  * remaining quantity
-  * whether TP1 has been hit
-  * break-even stop after TP1
-* When price hits TP1:
-
-  * sell half position
-  * mark TP1 hit
-  * move stop on remainder to break-even
-* When price hits TP2:
-
-  * sell remaining position
-* When price hits break-even after TP1:
-
-  * sell remaining position
-* Keep all of this paper-only in SQLite.
-* Do not call exchange APIs.
-
-Option B:
-If Option A is too large, add a harness candidate/execution mode that matches current runtime exactly:
-
-* single full-position stop
-* single full-position take-profit
-* no partial TP
-* no break-even move
-
-Then compare active strategies under runtime-matched exits.
-
-Acceptance:
-
-* Runtime and harness should not claim the same strategy behavior if exits differ.
-* Docs must clearly explain which exit model active paper strategies use.
-* Add regression tests for partial TP / BE behavior if implemented.
-
----
-
-## Phase 7: Improve auto-paper idempotency and conflict handling
-
-Current idempotency is by `strategy_version + symbol + signal_close_time`.
-
-Add a global conflict guard so the same symbol/signal does not get duplicated across primary and secondary strategy when both fire at the same time.
-
-Suggested behavior:
-
-* If primary and secondary both pass for same `symbol + signal_close_time`, choose one entry.
-* Prefer the strategy with higher AI score.
-* If scores tie, prefer `ai_score_v2_ablate_oi` only if explicitly configured, otherwise prefer primary control.
-* Log the skipped strategy as `rejected` or `conflict_skipped`, with reason:
-
-  * `duplicate_symbol_signal_conflict`
-
-Add a config option:
-
-* `AUTO_PAPER_ALLOW_MULTI_STRATEGY_SAME_SIGNAL=false`
-
-Default should be false.
-
-Acceptance:
-
-* With one global slot, behavior remains safe.
-* If max slots is raised in the future, duplicate same-signal entries are still blocked unless explicitly allowed.
-* Forward report should show conflict skips.
-
----
-
-## Phase 8: Add regime-abstention research candidates
-
-Add a harness-only candidate family, for example:
-
-* `regime_abstention_filters`
-
-Goal:
-Improve existing approved strategy candidates by blocking bad regimes, not by adding more aggressive entries.
-
-Test filters around:
-
-* BTC 24h return too negative
-* BTC 24h return too positive / overheated
-* basket breadth too weak
-* basket breadth too euphoric
-* funding panic
-* OI expansion/collapse extremes
-* global account crowding
-* top-trader position crowding
-* high ATR expansion / volatility shock
-* off-hours avoidance
-* New York weakness, if supported by data
-* macro/news blackout if historical data is available; otherwise keep it diagnostic-only
-
-Candidate examples:
-
-* active scorecard + BTC return band
-* active scorecard + breadth band
-* active scorecard + funding-not-panic
-* active scorecard + global account cap
-* active scorecard + top-position cap
-* active scorecard + volatility shock block
-* active scorecard + London/overlap only
-* OI-ablation scorecard + the same abstention filters
-
-Do not wire these into runtime.
-
-Acceptance:
-
-* Candidate family is available through:
-
-  `python scripts/research_harness.py --candidate-family regime_abstention_filters --trigger-limit 12000 --universe-limit 30 --workers 2 --json-out tmp/research_runs/regime_abstention_filters_universe30_latest.json`
-
-* Results must be evaluated by existing promotion gates.
-
-* If no candidate passes, document that no runtime change is warranted.
-
----
-
-## Phase 9: Continue relative-strength refinement
-
-Continue the documented `relative_strength_refinement` path.
-
-Focus only on the near-miss HTF continuation branch. Do not add a huge unfocused search space.
-
-Research dimensions:
-
-* relative strength threshold:
-
-  * 0.60
-  * 0.65
-  * 0.70
-  * 0.75
-* BTC return band:
-
-  * avoid risk-off
-  * avoid overheated blowoff
-* breadth band:
-
-  * constructive but not euphoric
-* taker buy pressure:
-
-  * minimum 1.00
-  * 1.10
-  * 1.25
-* global account cap:
-
-  * 1.20
-  * 1.35
-  * 1.50
-  * 1.80
-* top-trader position cap:
-
-  * 1.60
-  * 2.00
-  * 2.20
-* target multiple and max bars:
-
-  * avoid over-optimizing
-  * test a small number of sensible combinations
-* session:
-
-  * London
-  * London/NY overlap
-  * active session excluding weak buckets
-
-Acceptance:
-
-* Keep the candidate count bounded.
-* Do not promote unless all promotion gates pass.
-* If the best candidate is still below 80 trades or below 4/5 positive folds, keep it research-only.
-* Update `docs/research-campaign.md` with the result summary.
-
----
-
-## Phase 10: Add documentation updates
-
-Update docs to reflect the improved workflow.
-
-Files likely needing updates:
-
-* `README.md`
-* `AGENTS.md`
-* `docs/active-strategy.md`
-* `docs/research-campaign.md`
-* `docs/architecture-ops.md`
-
-Add a recommended daily workflow:
+* Existing command still works:
 
 ```powershell
-docker compose up --build
-
 python scripts\forward_paper_report.py --markdown-out tmp\forward_paper_report_latest.md --json-out tmp\forward_paper_report_latest.json
-
-python scripts\runtime_harness_parity.py --strategy ai_score_v2_base_score7 --symbols ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT --markdown-out tmp\runtime_harness_parity_base_latest.md --json-out tmp\runtime_harness_parity_base_latest.json
-
-python scripts\runtime_harness_parity.py --strategy ai_score_v2_ablate_oi --symbols ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT --markdown-out tmp\runtime_harness_parity_oi_latest.md --json-out tmp\runtime_harness_parity_oi_latest.json
 ```
 
-Add clear guidance:
-
-* Backtests are hypothesis filters, not proof.
-* Forward-paper results are the main evidence before testnet.
-* No live trading until separate safety review.
-* No strategy promotion without promotion gates and explicit user approval.
+* New fields appear in JSON.
+* Markdown has a readable “Campaign Status” section.
+* No crash when there are zero trades.
+* Tests updated.
 
 ---
 
-## Phase 11: Testing and validation
+## Phase 4: Add a paper campaign observation log
 
-Run these checks before finishing:
+Create a script:
+
+* `scripts/paper_campaign_log.py`
+
+Purpose:
+Append a compact daily observation entry from the latest diagnostics into a durable markdown log.
+
+Default output:
+
+* `tmp/paper_campaign_log.md`
+
+Each entry should include:
+
+* date/time UTC
+* auto-paper enabled/paused state
+* open auto positions
+* completed trades in the period
+* total realized R in the period
+* per-strategy realized R
+* max drawdown R
+* parity status summary
+* top rejection blocker
+* top symbol drag
+* top session drag
+* recommended action from forward report
+* short notes field if provided by CLI
+
+CLI:
+
+* `--forward-json tmp/forward_paper_report_latest.json`
+* `--parity-base-json tmp/runtime_harness_parity_base_latest.json`
+* `--parity-oi-json tmp/runtime_harness_parity_oi_latest.json`
+* `--out tmp/paper_campaign_log.md`
+* `--note "..."`
+
+Do not commit `tmp/paper_campaign_log.md` by default unless the user explicitly wants the campaign journal committed. Add it to docs as a local operations log.
+
+Acceptance:
+
+* Works even if parity JSON files are missing.
+* Works with zero trades.
+* Appends instead of overwriting.
+* Does not call trading endpoints.
+* Does not mutate DB.
+
+---
+
+## Phase 5: Add a daily diagnostics sidecar option, but keep it read-only
+
+The user wants auto-paper to run in the background. Add an optional read-only diagnostics sidecar to Docker Compose, or document how to run it manually if adding the sidecar is too invasive.
+
+Preferred:
+
+* Add a service named `paper-diagnostics`.
+* It should run `scripts/daily_paper_diagnostics_service.py`.
+* It should run every configurable interval, for example every 6 hours or 24 hours.
+* It must be read-only.
+* It must not call `/api/paper/*`.
+* It may call `/health` and `/api/dashboard` through parity scripts.
+* It should write latest reports under `tmp/`.
+
+Environment:
+
+* `PAPER_DIAGNOSTICS_INTERVAL_SECONDS=21600`
+* `PAPER_DIAGNOSTICS_SINCE_HOURS=24`
+* `PAPER_DIAGNOSTICS_BASE_URL=http://app:3000`
+* `PAPER_DIAGNOSTICS_SYMBOLS=ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT`
+
+If Docker networking makes this awkward, document the manual host command instead and skip the sidecar.
+
+Acceptance:
+
+* Main app still starts normally.
+* Diagnostics sidecar does not place trades.
+* Failure in diagnostics sidecar must not stop the app.
+* Reports are written under `tmp/`.
+
+---
+
+## Phase 6: Add UI visibility for auto-paper state
+
+Improve the frontend so the user can see the background bot state without opening logs.
+
+Show:
+
+* auto-paper enabled
+* paused/resumed state
+* active open slot count
+* today’s auto entries
+* daily realized PnL/R
+* current kill-switch status
+* latest decision
+* latest rejection reason
+* current open auto position, if any
+* strategy responsible for open position
+* current open position validity if available
+
+Optional UI buttons:
+
+* Pause auto-paper
+* Resume auto-paper
+
+Only add pause/resume buttons if the backend endpoints from Phase 2 are implemented.
+
+Acceptance:
+
+* UI does not allow forced trades.
+* UI does not add live execution.
+* UI clearly labels everything as paper-only.
+* UI handles missing status payload gracefully.
+
+---
+
+## Phase 7: Improve auto-paper decision logging
+
+Enhance `auto_paper_decisions` logging so future analysis is better.
+
+For every cycle where a technical READY setup exists, record enough context to explain the decision.
+
+For entered/rejected/conflict_skipped/paused_blocked decisions, store:
+
+* strategy_version
+* symbol
+* signal_close_time
+* technical_stage
+* final_stage
+* ai_score
+* failed checks
+* blocker summary
+* session bucket
+* BTC 24h return if available
+* basket breadth if available
+* relative strength percentile if available
+* funding bps if available
+* taker buy/sell ratio if available
+* global account long/short ratio if available
+* top-trader position ratio if available
+* OI 24h change if available
+* news gate status if available
+* duplicate/conflict reason if applicable
+* risk plan fields if available
+
+If the table schema is already fixed, either:
+
+* add nullable columns via migration, or
+* add `context_json TEXT` to avoid too many schema migrations.
+
+Preferred:
+
+* Add `context_json TEXT`.
+
+Acceptance:
+
+* Existing DB upgrades cleanly.
+* Existing reports still work with old rows.
+* New forward report can use context_json if present.
+* No trading behavior changes except better logging.
+
+---
+
+## Phase 8: Add a strategy comparison report for active paper bots
+
+Create or extend a script:
+
+* `scripts/strategy_forward_compare.py`
+
+Purpose:
+Compare `ai_score_v2_base_score7` vs `ai_score_v2_ablate_oi` using forward paper decisions and trades.
+
+It should answer:
+
+* Which strategy generated more READY setups?
+* Which entered more?
+* Which was rejected more?
+* Which had better realized R?
+* Which had better avg R?
+* Which had lower drawdown?
+* Did duplicate conflict blocking suppress one strategy more than the other?
+* Did OI ablation actually help forward paper quality?
+* Are differences statistically meaningful yet, or sample too small?
+
+Output:
+
+* markdown
+* JSON
+
+Default command:
 
 ```powershell
-python -m py_compile scripts\strategy_study.py scripts\research_harness.py scripts\derivatives_data.py scripts\derivatives_research.py scripts\backfill_metrics.py scripts\event_dataset.py scripts\predictive_meta_model.py scripts\runtime_harness_parity.py scripts\forward_paper_report.py scripts\test_research_harness.py scripts\test_derivatives_data.py scripts\test_backfill_metrics.py scripts\test_event_dataset.py scripts\test_predictive_meta_model.py
+python scripts\strategy_forward_compare.py --markdown-out tmp\strategy_forward_compare_latest.md --json-out tmp\strategy_forward_compare_latest.json
+```
 
+Acceptance:
+
+* No crash with zero trades.
+* Clearly says “sample too small” when sample is too small.
+* Does not recommend replacing active strategies unless sample is meaningful and documented gates are considered.
+* Does not promote any strategy.
+
+---
+
+## Phase 9: Keep research restrained
+
+Do not add a large new strategy search in this pass.
+
+Allowed research-only work:
+
+* `candidate_diagnostics.py` improvements
+* strict-fill sensitivity improvements
+* analysis of why near-miss candidates fail
+* runtime-exit-parity diagnostics
+* regime bucket diagnostics
+
+Do not wire new candidates into runtime.
+
+Do not promote:
+
+* `regime_abs_oi_funding_not_panic_s7`
+* `rs_refine_htf_position_loose_s5`
+* any relative-strength refinement candidate
+* any regime-abstention candidate
+
+Instead, add diagnostics that answer:
+
+* Which fold kills the candidate?
+* Which session kills it?
+* Which symbols carry the holdout?
+* How much performance disappears under strict fills?
+* Is the candidate dependent on one recent market regime?
+* Is there overlap with active approved paper signals?
+
+Acceptance:
+
+* New research output is clearly labeled research-only.
+* Docs say no runtime change is warranted unless gates pass and user approves.
+
+---
+
+## Phase 10: Add SQLite backup/export utility
+
+Since auto-paper is now running in the background, add a simple safety utility:
+
+* `scripts/backup_paper_db.py`
+
+Features:
+
+* copy `data/tradebot.db` to `tmp/backups/tradebot_YYYYMMDD_HHMMSS.db`
+* optional `--compress`
+* optional `--keep-last N`
+* optional `--include-reports`
+* print backup path
+* never delete the active DB
+* never reset account
+
+Add docs:
+
+```powershell
+python scripts\backup_paper_db.py --keep-last 10
+```
+
+Acceptance:
+
+* Works if DB exists.
+* Fails gracefully if DB is missing.
+* Does not mutate trading state.
+* Does not include secrets.
+
+---
+
+## Phase 11: Update documentation
+
+Update:
+
+* `AGENTS.md`
+* `README.md`
+* `docs/active-strategy.md`
+* `docs/architecture-ops.md`
+* `docs/research-campaign.md`
+
+Clarify:
+
+* Auto-paper is intentionally enabled in Compose for the approved guarded paper test.
+* It remains local SQLite paper-only.
+* The user can pause/resume via the new local pause control.
+* Daily diagnostics are required while background paper testing is enabled.
+* No live trading.
+* No strategy promotion without gates and explicit approval.
+* Near-miss candidates remain research-only.
+* Forward-paper evidence is now the main evidence stream.
+
+Add recommended daily workflow:
+
+```powershell
+docker compose up -d --build
+python scripts\daily_paper_diagnostics.py
+python scripts\paper_campaign_log.py --note "daily check"
+```
+
+Add recommended weekly workflow:
+
+```powershell
+python scripts\strategy_forward_compare.py --markdown-out tmp\strategy_forward_compare_latest.md --json-out tmp\strategy_forward_compare_latest.json
+python scripts\candidate_diagnostics.py --candidate-name regime_abs_oi_funding_not_panic_s7 --candidate-name rs_refine_htf_position_loose_s5 --source-artifact tmp\research_runs\relative_strength_refinement_universe30_20260501.json --universe-limit 30 --json-out tmp\research_runs\candidate_diagnostics_latest.json --markdown-out tmp\research_runs\candidate_diagnostics_latest.md
+python scripts\backup_paper_db.py --keep-last 10
+```
+
+---
+
+## Phase 12: Tests and checks
+
+Update or add tests for:
+
+* auto-paper status endpoint if practical
+* pause/resume persistence
+* forward-paper campaign status
+* strategy comparison with zero trades
+* strategy comparison with small sample
+* paper campaign log append behavior
+* daily diagnostics health skip behavior
+* backup script path generation and keep-last behavior
+* session bucket consistency
+
+Run:
+
+```powershell
+python -m py_compile scripts\strategy_study.py scripts\research_harness.py scripts\event_dataset.py scripts\predictive_meta_model.py scripts\candidate_diagnostics.py scripts\daily_paper_diagnostics.py scripts\forward_paper_report.py scripts\runtime_harness_parity.py scripts\runtime_telemetry_report.py scripts\market_memory_dataset.py
 python scripts\test_research_harness.py
+python scripts\test_predictive_meta_model.py
+python scripts\test_forward_paper_report.py
+python scripts\test_runtime_harness_parity.py
+python scripts\test_runtime_telemetry_report.py
+python scripts\test_market_memory_dataset.py
+python scripts\test_event_dataset.py
 python scripts\test_derivatives_data.py
 python scripts\test_backfill_metrics.py
-python scripts\test_event_dataset.py
-python scripts\test_predictive_meta_model.py
-
 cargo check
 ```
 
-If new scripts are added, include them in py_compile checks.
-
-If any test fails:
-
-* Diagnose the cause.
-* Fix the code if the test is valid.
-* Only update tests if the old expectation is clearly obsolete and the new behavior is documented.
+If new scripts are added, include them in the py_compile list and add lightweight tests.
 
 ---
 
-## Final deliverable
+## Final response expected from Codex
 
-When done, provide a concise summary with:
+When finished, summarize:
 
 1. Files changed.
-2. What was implemented.
-3. What was intentionally left research-only.
-4. Whether tests/checks passed.
-5. Any known limitations.
-6. Recommended next command for the user to run.
+2. What was added.
+3. Whether auto-paper remained enabled in Compose.
+4. Whether all changes are paper-only.
+5. Whether any endpoint can place/cancel/reset orders.
+6. Which reports/scripts were added.
+7. Tests/checks run and results.
+8. Known limitations.
+9. Recommended next command for the user.
 
-Do not claim a strategy is profitable.
-Do not claim anything is live-ready.
+Do not claim profitability.
+Do not claim live readiness.
 Do not enable live execution.
+Do not promote new strategies.
 
 ```
+
+Moj osebni vrstni red za Codex bi bil: najprej **Phase 1 + Phase 2 + Phase 3**, ker ko imaš paper bota stalno vklopljenega, je najpomembnejše, da ga lahko vidiš, pavziraš in objektivno oceniš.
 ```

@@ -26,12 +26,17 @@ Use `--universe-profile permissive` only for exploratory research, not for promo
 ## Checks
 
 ```powershell
-python -m py_compile scripts/strategy_study.py scripts/research_harness.py scripts/derivatives_data.py scripts/derivatives_research.py scripts/backfill_metrics.py scripts/event_dataset.py scripts/predictive_meta_model.py scripts/runtime_harness_parity.py scripts/forward_paper_report.py scripts/daily_paper_diagnostics.py scripts/test_research_harness.py scripts/test_derivatives_data.py scripts/test_backfill_metrics.py scripts/test_event_dataset.py scripts/test_predictive_meta_model.py
+python -m py_compile scripts/strategy_study.py scripts/research_harness.py scripts/derivatives_data.py scripts/derivatives_research.py scripts/backfill_metrics.py scripts/event_dataset.py scripts/predictive_meta_model.py scripts/runtime_harness_parity.py scripts/forward_paper_report.py scripts/daily_paper_diagnostics.py scripts/daily_paper_diagnostics_service.py scripts/paper_campaign_log.py scripts/strategy_forward_compare.py scripts/backup_paper_db.py scripts/test_research_harness.py scripts/test_derivatives_data.py scripts/test_backfill_metrics.py scripts/test_event_dataset.py scripts/test_predictive_meta_model.py scripts/test_forward_paper_report.py scripts/test_paper_campaign_log.py scripts/test_strategy_forward_compare.py scripts/test_backup_paper_db.py scripts/test_daily_paper_diagnostics.py
 python scripts/test_research_harness.py
 python scripts/test_derivatives_data.py
 python scripts/test_backfill_metrics.py
 python scripts/test_event_dataset.py
 python scripts/test_predictive_meta_model.py
+python scripts/test_forward_paper_report.py
+python scripts/test_paper_campaign_log.py
+python scripts/test_strategy_forward_compare.py
+python scripts/test_backup_paper_db.py
+python scripts/test_daily_paper_diagnostics.py
 cargo check
 ```
 
@@ -257,13 +262,24 @@ Full result: `tmp/research_runs/relative_strength_refinement_universe30_20260430
 The daily read-only workflow is:
 
 ```powershell
-docker compose up --build
-python scripts\forward_paper_report.py --markdown-out tmp\forward_paper_report_latest.md --json-out tmp\forward_paper_report_latest.json
-python scripts\runtime_harness_parity.py --strategy ai_score_v2_base_score7 --symbols ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT --markdown-out tmp\runtime_harness_parity_base_latest.md --json-out tmp\runtime_harness_parity_base_latest.json
-python scripts\runtime_harness_parity.py --strategy ai_score_v2_ablate_oi --symbols ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT --markdown-out tmp\runtime_harness_parity_oi_latest.md --json-out tmp\runtime_harness_parity_oi_latest.json
+docker compose up -d --build
+python scripts\daily_paper_diagnostics.py
+python scripts\paper_campaign_log.py --note "daily check"
 ```
 
 `scripts\daily_paper_diagnostics.py` orchestrates those reports plus runtime telemetry and optional market-memory reporting. It is read-only and does not call `/api/paper/*`.
+
+The forward-paper report is now the main evidence stream during background paper testing. It includes campaign status, per-strategy summaries, and analysis-only recommendations. It must not be read as live-readiness and it does not pause, resume, promote, or demote strategies automatically.
+
+Weekly comparison and safety workflow:
+
+```powershell
+python scripts\strategy_forward_compare.py --markdown-out tmp\strategy_forward_compare_latest.md --json-out tmp\strategy_forward_compare_latest.json
+python scripts\candidate_diagnostics.py --candidate-name regime_abs_oi_funding_not_panic_s7 --candidate-name rs_refine_htf_position_loose_s5 --source-artifact tmp\research_runs\relative_strength_refinement_universe30_20260501.json --universe-limit 30 --json-out tmp\research_runs\candidate_diagnostics_latest.json --markdown-out tmp\research_runs\candidate_diagnostics_latest.md
+python scripts\backup_paper_db.py --keep-last 10
+```
+
+The strategy comparison report only compares the two active paper bots. It does not recommend replacing active strategies unless the forward-paper sample becomes meaningful and the normal promotion framework is reviewed separately.
 
 The research harness now supports conservative fill realism with `--strict-fills`, `--entry-slippage-bps`, `--stop-slippage-bps`, `--tp-slippage-bps`, and `--no-slippage`. Legacy behavior remains the default unless strict fills or explicit slippage arguments are provided. The JSON artifact records the fill settings in `settings.fill_settings`.
 
@@ -286,6 +302,7 @@ python scripts\research_harness.py --candidate-family regime_abstention_filters 
 No candidate from this family should be wired into runtime unless it passes the normal promotion gates and receives explicit user approval.
 
 Full result: `tmp/research_runs/regime_abstention_filters_universe30_latest.json` completed on May 1, 2026 with `12` candidates and `0` promotion passes. The top candidate was `regime_abs_oi_funding_not_panic_s7` with `64` OOS trades, `18.1228R` net, `0.2832R` average, `pf=1.7027`, `max_drawdown=4.9267R`, holdout `1.9436R`, and `4/5` positive folds. It failed the promotion gate only on `executed_trades<80`. This is a useful abstention signal, not a runtime promotion.
+It remains research-only and must not be wired into runtime while the active guarded paper test is running.
 
 ## Relative Strength Follow-up
 
@@ -298,6 +315,7 @@ python scripts\research_harness.py --candidate-family relative_strength_refineme
 Backtests are hypothesis filters, not proof. Forward-paper results remain the main evidence before any testnet discussion, and there is no live trading without a separate safety review.
 
 Full result: `tmp/research_runs/relative_strength_refinement_universe30_20260501.json` completed on May 1, 2026 with `17` candidates and `0` promotion passes. The top candidate was still `rs_refine_htf_position_loose_s5`, now with `88` OOS trades, `15.4961R` net, `0.1761R` average, `pf=1.8655`, `max_drawdown=5.6977R`, and holdout `18.0004R`, but only `1/5` validation folds were positive. The result remains holdout-skewed, so no runtime or paper-bot change is warranted.
+Relative-strength refinement remains research-only and should be evaluated through diagnostics, not runtime wiring.
 
 ## Near-Miss Candidate Diagnostics
 
@@ -310,3 +328,5 @@ python scripts\candidate_diagnostics.py --candidate-name regime_abs_oi_funding_n
 `regime_abs_oi_funding_not_panic_s7` remains a clean near-miss, not a promotion: `64` OOS trades, `18.1228R` net, `0.2832R` average, `pf=1.7027`, `max_drawdown=4.9267R`, holdout `1.9436R`, and `4/5` positive folds. It failed only `executed_trades<80`. Strict-fill sensitivity reduced net by `3.9049R` and flipped holdout below the promotion floor, so the filter is promising but still too sparse and fill-sensitive to promote.
 
 `rs_refine_htf_position_loose_s5` still fails fold stability: `88` OOS trades, `15.4961R` net, `0.1761R` average, `pf=1.8655`, `max_drawdown=5.6977R`, holdout `18.0004R`, and only `1/5` positive folds. The diagnostic confirms the edge is holdout-skewed, with validation folds mostly empty or negative. No runtime or paper-bot change is warranted from either diagnostic.
+
+Future diagnostics for near misses should answer which fold kills the candidate, which session or symbol carries the holdout, how strict fills change the result, whether the edge depends on one recent regime, and whether there is overlap with active approved paper signals. These outputs are research-only unless a later candidate passes every promotion gate and receives explicit user approval.
