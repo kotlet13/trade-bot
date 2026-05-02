@@ -10,7 +10,7 @@ The project is not approved for live trading. Do not add live-funds execution or
 
 - Mode: approved gated paper testing plus ongoing research.
 - Live funds: disabled / out of scope.
-- Paper trading: approved for primary `ai_score_v2_base_score7` and secondary `ai_score_v2_ablate_oi`; auto-paper is disabled by default in Compose and can be enabled only for local paper ledger entries with the documented guardrails.
+- Paper trading: approved for primary `ai_score_v2_base_score7` and secondary `ai_score_v2_ablate_oi`; auto-paper is enabled in Compose for local paper ledger entries only, with the documented guardrails.
 - Latest completed focused full walk-forward run: `tmp/research_runs/ai_scorecard_v2_ablate_oi_confirm_universe30_20260428.json`.
 - Latest focused full run result: `ai_score_v2_ablate_oi` confirmed its harness promotion-gate pass after the full ablation run.
 - Runtime status: `ai_score_v2_base_score7` and `ai_score_v2_ablate_oi` are wired into live `SignalAssistant` as gated paper strategies. Auto-paper uses one global slot, idempotency by `strategy + symbol + signal_close_time`, duplicate same-symbol/same-signal conflict blocking across strategies, daily caps, and local SQLite paper fills only.

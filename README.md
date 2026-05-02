@@ -55,7 +55,7 @@ Compose zazene tudi `news-events` research sidecar. Ta vsakih 15 minut osvezi pu
   - recent replay primeri z outcome in trajanje setupa
 - rocni `market` in `limit` paper orderji
 - stop-loss in take-profit na long paper entryjih
-- guarded auto-paper worker: privzeto izklopljen, ena globalna auto pozicija naenkrat, najvec 3 auto entryji na UTC dan, 2% dnevni realized-loss kill switch
+- guarded auto-paper worker: v `docker-compose.yml` vklopljen za odobren gated paper test, ena globalna auto pozicija naenkrat, najvec 3 auto entryji na UTC dan, 2% dnevni realized-loss kill switch
     - oba paper bota uporabljata isti lokalni SQLite paper executor in isti globalni slot
     - duplicate same-symbol/same-signal entries across primary and secondary are blocked unless explicitly enabled
 - virtualni cash, pozicije, odprti orderji in PnL
@@ -98,7 +98,7 @@ Okoljske spremenljivke:
 - `STARTING_CASH=10000`
 - `PAPER_FEE_BPS=10`
 - `DEFAULT_INTERVAL=1m`
-- `AUTO_PAPER_TRADING=false` by default in Compose; set `true` only when intentionally enabling guarded local paper entries
+- `AUTO_PAPER_TRADING=true` in Compose for approved gated local paper entries
 - `AUTO_PAPER_INTERVAL_SECONDS=60`
 - `AUTO_PAPER_MAX_OPEN_SLOTS=1`
 - `AUTO_PAPER_ALLOW_MULTI_STRATEGY_SAME_SIGNAL=false`

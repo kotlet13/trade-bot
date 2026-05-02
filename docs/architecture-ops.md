@@ -56,7 +56,7 @@ Vrne:
 Auto-paper worker:
 
 - vklopi ga `AUTO_PAPER_TRADING=true`
-- `docker-compose.yml` ga privzeto nastavi na `false`; vklopi se samo z eksplicitno spremembo env var
+- `docker-compose.yml` ga nastavi na `true` za odobren guarded local paper test
 - preverja promoted watchlist na `AUTO_PAPER_INTERVAL_SECONDS`
 - uporablja `ai_score_v2_base_score7` in `ai_score_v2_ablate_oi` gate kot `SignalAssistant`
 - odda samo lokalni paper market buy v SQLite ledger, brez exchange API-ja
@@ -184,7 +184,7 @@ Privzeta konfiguracija:
 - `STARTING_CASH=10000`
 - `PAPER_FEE_BPS=10`
 - `DEFAULT_INTERVAL=1m`
-- `AUTO_PAPER_TRADING=false`
+- `AUTO_PAPER_TRADING=true`
 - `AUTO_PAPER_INTERVAL_SECONDS=60`
 - `AUTO_PAPER_MAX_OPEN_SLOTS=1`
 - `AUTO_PAPER_ALLOW_MULTI_STRATEGY_SAME_SIGNAL=false`

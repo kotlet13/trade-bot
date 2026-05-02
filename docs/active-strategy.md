@@ -9,7 +9,7 @@ Current active gated paper strategies:
 - Runtime: `SignalAssistant` and the auto-paper worker
 - Execution: local SQLite paper trades only
 - Live funds: disabled
-- Default runtime config: auto-paper is disabled in `docker-compose.yml` unless `AUTO_PAPER_TRADING=true` is explicitly set
+- Default runtime config: `docker-compose.yml` sets `AUTO_PAPER_TRADING=true` for the approved guarded local paper test
 
 The secondary bot uses the same reclaim setup, score threshold, guardrails, stop/TP handling, and fresh public Binance USD-M data requirements, but ignores the OI-change score component. The focused confirmation artifact is `tmp/research_runs/ai_scorecard_v2_ablate_oi_confirm_universe30_20260428.json`.
 
