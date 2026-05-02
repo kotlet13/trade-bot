@@ -73,9 +73,9 @@ def session_bucket(timestamp_ms: int | None) -> str:
     hour = datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC).hour
     if 7 <= hour < 12:
         return "london"
-    if 12 <= hour < 15:
+    if 12 <= hour < 16:
         return "london_ny_overlap"
-    if 15 <= hour < 22:
+    if 16 <= hour < 22:
         return "new_york"
     return "off_hours"
 

@@ -46,9 +46,16 @@ If no strategy passes, the correct action is to stay flat and document the faile
 Run checks:
 
 ```powershell
-python -m py_compile scripts\strategy_study.py scripts\research_harness.py scripts\event_dataset.py scripts\predictive_meta_model.py scripts\test_research_harness.py scripts\test_predictive_meta_model.py
+python -m py_compile scripts\strategy_study.py scripts\research_harness.py scripts\event_dataset.py scripts\predictive_meta_model.py scripts\candidate_diagnostics.py scripts\daily_paper_diagnostics.py scripts\forward_paper_report.py scripts\runtime_harness_parity.py scripts\runtime_telemetry_report.py scripts\market_memory_dataset.py
 python scripts\test_research_harness.py
 python scripts\test_predictive_meta_model.py
+python scripts\test_forward_paper_report.py
+python scripts\test_runtime_harness_parity.py
+python scripts\test_runtime_telemetry_report.py
+python scripts\test_market_memory_dataset.py
+python scripts\test_event_dataset.py
+python scripts\test_derivatives_data.py
+python scripts\test_backfill_metrics.py
 cargo check
 ```
 
@@ -119,15 +126,6 @@ Do not commit by default:
 - `*.pyc`
 - `data/*.db`
 - `target/`
-
-## Current Private Repo
-
-Private GitHub repo:
-
-- `kotlet13/trade-bot`
-- URL: `https://github.com/kotlet13/trade-bot`
-
-The pushed private repo was created from a clean export, not the old local git history, because the old history had tracked runtime/cache/dependency files.
 
 ## Suggested Next Work
 

@@ -6,6 +6,8 @@ import json
 import sqlite3
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -57,6 +59,31 @@ def run_command(name: str, command: list[str]) -> DiagnosticRun:
     )
 
 
+def run_health_check(base_url: str, timeout_seconds: float) -> DiagnosticRun:
+    url = f"{base_url.rstrip('/')}/health"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout_seconds) as response:
+            body = response.read().decode("utf-8", errors="replace").strip()
+            ok = response.status == 200 and body == "ok"
+            return DiagnosticRun(
+                name="app_health",
+                command=["GET", url],
+                returncode=0 if ok else 1,
+                stdout_tail=f"HTTP {response.status}: {body}",
+                stderr_tail="" if ok else "health endpoint returned an unexpected response",
+                ok=ok,
+            )
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        return DiagnosticRun(
+            name="app_health",
+            command=["GET", url],
+            returncode=1,
+            stdout_tail="",
+            stderr_tail=f"health check failed for {url}: {error}",
+            ok=False,
+        )
+
+
 def render_markdown(runs: list[DiagnosticRun], skipped: list[str]) -> str:
     lines = ["# Daily Paper Diagnostics", ""]
     for run in runs:
@@ -81,6 +108,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run read-only daily paper-trading diagnostics.")
     parser.add_argument("--db", type=Path, default=DEFAULT_DB_PATH)
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
+    parser.add_argument("--health-timeout-seconds", type=float, default=5.0)
     parser.add_argument("--symbols", default=DEFAULT_SYMBOLS)
     parser.add_argument("--since-hours", type=float, default=24.0)
     parser.add_argument("--tmp-dir", type=Path, default=Path("tmp"))
@@ -99,6 +127,9 @@ def main() -> int:
 
     if not args.db.exists():
         skipped.append(f"database not found at `{args.db}`; local report scripts may not have data")
+
+    runs.append(run_health_check(args.base_url, args.health_timeout_seconds))
+    app_healthy = runs[-1].ok
 
     commands: list[tuple[str, list[str]]] = [
         (
@@ -131,41 +162,49 @@ def main() -> int:
                 str(args.tmp_dir / "runtime_telemetry_report_latest.json"),
             ],
         ),
-        (
-            "runtime_harness_parity_base",
-            [
-                py,
-                str(scripts_dir / "runtime_harness_parity.py"),
-                "--base-url",
-                args.base_url,
-                "--strategy",
-                "ai_score_v2_base_score7",
-                "--symbols",
-                args.symbols,
-                "--markdown-out",
-                str(args.tmp_dir / "runtime_harness_parity_base_latest.md"),
-                "--json-out",
-                str(args.tmp_dir / "runtime_harness_parity_base_latest.json"),
-            ],
-        ),
-        (
-            "runtime_harness_parity_oi",
-            [
-                py,
-                str(scripts_dir / "runtime_harness_parity.py"),
-                "--base-url",
-                args.base_url,
-                "--strategy",
-                "ai_score_v2_ablate_oi",
-                "--symbols",
-                args.symbols,
-                "--markdown-out",
-                str(args.tmp_dir / "runtime_harness_parity_oi_latest.md"),
-                "--json-out",
-                str(args.tmp_dir / "runtime_harness_parity_oi_latest.json"),
-            ],
-        ),
     ]
+
+    if app_healthy:
+        commands.extend(
+            [
+                (
+                    "runtime_harness_parity_base",
+                    [
+                        py,
+                        str(scripts_dir / "runtime_harness_parity.py"),
+                        "--base-url",
+                        args.base_url,
+                        "--strategy",
+                        "ai_score_v2_base_score7",
+                        "--symbols",
+                        args.symbols,
+                        "--markdown-out",
+                        str(args.tmp_dir / "runtime_harness_parity_base_latest.md"),
+                        "--json-out",
+                        str(args.tmp_dir / "runtime_harness_parity_base_latest.json"),
+                    ],
+                ),
+                (
+                    "runtime_harness_parity_oi",
+                    [
+                        py,
+                        str(scripts_dir / "runtime_harness_parity.py"),
+                        "--base-url",
+                        args.base_url,
+                        "--strategy",
+                        "ai_score_v2_ablate_oi",
+                        "--symbols",
+                        args.symbols,
+                        "--markdown-out",
+                        str(args.tmp_dir / "runtime_harness_parity_oi_latest.md"),
+                        "--json-out",
+                        str(args.tmp_dir / "runtime_harness_parity_oi_latest.json"),
+                    ],
+                ),
+            ]
+        )
+    else:
+        skipped.append("runtime/harness parity; app health check failed")
 
     for name, command in commands:
         runs.append(run_command(name, command))

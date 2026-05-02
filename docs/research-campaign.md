@@ -298,3 +298,15 @@ python scripts\research_harness.py --candidate-family relative_strength_refineme
 Backtests are hypothesis filters, not proof. Forward-paper results remain the main evidence before any testnet discussion, and there is no live trading without a separate safety review.
 
 Full result: `tmp/research_runs/relative_strength_refinement_universe30_20260501.json` completed on May 1, 2026 with `17` candidates and `0` promotion passes. The top candidate was still `rs_refine_htf_position_loose_s5`, now with `88` OOS trades, `15.4961R` net, `0.1761R` average, `pf=1.8655`, `max_drawdown=5.6977R`, and holdout `18.0004R`, but only `1/5` validation folds were positive. The result remains holdout-skewed, so no runtime or paper-bot change is warranted.
+
+## Near-Miss Candidate Diagnostics
+
+Focused diagnostics ran on May 2, 2026:
+
+```powershell
+python scripts\candidate_diagnostics.py --candidate-name regime_abs_oi_funding_not_panic_s7 --candidate-name rs_refine_htf_position_loose_s5 --source-artifact tmp\research_runs\relative_strength_refinement_universe30_20260501.json --universe-limit 30 --json-out tmp\research_runs\candidate_diagnostics_near_misses_20260502.json --markdown-out tmp\research_runs\candidate_diagnostics_near_misses_20260502.md
+```
+
+`regime_abs_oi_funding_not_panic_s7` remains a clean near-miss, not a promotion: `64` OOS trades, `18.1228R` net, `0.2832R` average, `pf=1.7027`, `max_drawdown=4.9267R`, holdout `1.9436R`, and `4/5` positive folds. It failed only `executed_trades<80`. Strict-fill sensitivity reduced net by `3.9049R` and flipped holdout below the promotion floor, so the filter is promising but still too sparse and fill-sensitive to promote.
+
+`rs_refine_htf_position_loose_s5` still fails fold stability: `88` OOS trades, `15.4961R` net, `0.1761R` average, `pf=1.8655`, `max_drawdown=5.6977R`, holdout `18.0004R`, and only `1/5` positive folds. The diagnostic confirms the edge is holdout-skewed, with validation folds mostly empty or negative. No runtime or paper-bot change is warranted from either diagnostic.

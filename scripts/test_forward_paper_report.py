@@ -4,6 +4,7 @@ from __future__ import annotations
 import sqlite3
 import sys
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -107,6 +108,8 @@ def main() -> int:
         assert summary["rejection_blockers"]["Score funding"] == 1
         assert summary["rejection_blockers"]["AI score v2"] == 1
         assert summary["grouped_stats"]["by_strategy"]["ai_score_v2_base_score7"]["count"] == 1
+        assert report.session_bucket(int(datetime(2026, 5, 1, 15, 30, tzinfo=UTC).timestamp() * 1000)) == "london_ny_overlap"
+        assert report.session_bucket(int(datetime(2026, 5, 1, 16, 0, tzinfo=UTC).timestamp() * 1000)) == "new_york"
         markdown = report.render_markdown(summary, decisions)
         assert "Forward Paper Report" in markdown
         assert "ETHUSDT" in markdown
