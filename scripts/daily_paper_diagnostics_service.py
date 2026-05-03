@@ -16,7 +16,7 @@ def env_int(name: str, default: int) -> int:
 
 
 def main() -> int:
-    interval_seconds = env_int("PAPER_DIAGNOSTICS_INTERVAL_SECONDS", 21600)
+    interval_seconds = env_int("PAPER_DIAGNOSTICS_INTERVAL_SECONDS", 86400)
     since_hours = env_int("PAPER_DIAGNOSTICS_SINCE_HOURS", 24)
     base_url = os.environ.get("PAPER_DIAGNOSTICS_BASE_URL", "http://app:3000")
     symbols = os.environ.get("PAPER_DIAGNOSTICS_SYMBOLS", "ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT")

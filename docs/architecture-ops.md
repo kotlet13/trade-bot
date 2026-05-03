@@ -222,7 +222,7 @@ Collector uporablja javne RSS vire in deterministicen classifier. Impact script 
 - uporablja `restart: unless-stopped`
 - deli `./data`, `./tmp`, in `./scripts`
 - izvaja `scripts/daily_paper_diagnostics_service.py`
-- privzeto uporablja `PAPER_DIAGNOSTICS_INTERVAL_SECONDS=21600`
+- privzeto uporablja `PAPER_DIAGNOSTICS_INTERVAL_SECONDS=86400`
 - klice samo read-only health/status/dashboard/parity poti
 - ne klice `/api/paper/*`, ne oddaja orderjev, in ne more ustaviti glavne aplikacije
 
@@ -260,7 +260,7 @@ Privzeta konfiguracija:
 - `NEWS_EVENT_COLLECTOR_LIMIT_PER_SOURCE=50`
 - `NEWS_EVENT_IMPACT_SINCE_HOURS=168`
 - `NEWS_EVENT_MARKET_MEMORY_SINCE_HOURS=168`
-- `PAPER_DIAGNOSTICS_INTERVAL_SECONDS=21600`
+- `PAPER_DIAGNOSTICS_INTERVAL_SECONDS=86400`
 - `PAPER_DIAGNOSTICS_SINCE_HOURS=24`
 - `PAPER_DIAGNOSTICS_BASE_URL=http://app:3000`
 - `PAPER_DIAGNOSTICS_SYMBOLS=ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT`

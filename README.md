@@ -29,7 +29,7 @@ docker compose up -d --build
 
 Container ima nastavljen `restart: unless-stopped`, zato se po ponovnem zagonu Docker engine-a znova zazene, dokler ga ne ustavis z `docker compose stop` ali `docker compose down`.
 
-Compose zazene tudi `news-events` research sidecar in read-only `paper-diagnostics` sidecar. `news-events` vsakih 15 minut osvezi public RSS event archive. `paper-diagnostics` privzeto vsakih 6 ur osvezi paper/telemetry/parity reporte pod `tmp/`. Noben sidecar ne klice `/api/paper/*` endpointov in noben ne oddaja paper ali live orderjev.
+Compose zazene tudi `news-events` research sidecar in read-only `paper-diagnostics` sidecar. `news-events` vsakih 15 minut osvezi public RSS event archive. `paper-diagnostics` privzeto enkrat na dan osvezi paper/telemetry/parity reporte pod `tmp/`. Noben sidecar ne klice `/api/paper/*` endpointov in noben ne oddaja paper ali live orderjev.
 
 ## Kaj zna danes
 
@@ -121,7 +121,7 @@ Okoljske spremenljivke:
 - `NEWS_EVENT_COLLECTOR_LIMIT_PER_SOURCE=50`
 - `NEWS_EVENT_IMPACT_SINCE_HOURS=168`
 - `NEWS_EVENT_MARKET_MEMORY_SINCE_HOURS=168`
-- `PAPER_DIAGNOSTICS_INTERVAL_SECONDS=21600`
+- `PAPER_DIAGNOSTICS_INTERVAL_SECONDS=86400`
 - `PAPER_DIAGNOSTICS_SINCE_HOURS=24`
 - `PAPER_DIAGNOSTICS_BASE_URL=http://app:3000`
 - `PAPER_DIAGNOSTICS_SYMBOLS=ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT`

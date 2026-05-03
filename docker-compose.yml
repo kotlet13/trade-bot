@@ -50,7 +50,7 @@ services:
     working_dir: /app
     command: python scripts/daily_paper_diagnostics_service.py
     environment:
-      PAPER_DIAGNOSTICS_INTERVAL_SECONDS: "21600"
+      PAPER_DIAGNOSTICS_INTERVAL_SECONDS: "86400"
       PAPER_DIAGNOSTICS_SINCE_HOURS: "24"
       PAPER_DIAGNOSTICS_BASE_URL: http://app:3000
       PAPER_DIAGNOSTICS_SYMBOLS: ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT
