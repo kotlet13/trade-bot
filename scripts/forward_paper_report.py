@@ -15,6 +15,7 @@ from typing import Any, Callable
 DEFAULT_DB_PATH = Path("data/tradebot.db")
 FOLLOWUP_BARS = 32
 TRIGGER_INTERVAL_MS = 15 * 60 * 1000
+SQLITE_BUSY_TIMEOUT_MS = 30_000
 
 
 @dataclass(frozen=True)
@@ -63,6 +64,12 @@ def table_exists(connection: sqlite3.Connection, name: str) -> bool:
         (name,),
     ).fetchone()
     return row is not None
+
+
+def connect_db(db_path: Path) -> sqlite3.Connection:
+    connection = sqlite3.connect(db_path, timeout=SQLITE_BUSY_TIMEOUT_MS / 1000)
+    connection.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
+    return connection
 
 
 def utc_text(timestamp_ms: int | None) -> str:
@@ -300,7 +307,7 @@ def load_forward_data(
     if not db_path.exists():
         raise FileNotFoundError(f"Paper database not found: {db_path}")
 
-    with sqlite3.connect(db_path) as connection:
+    with connect_db(db_path) as connection:
         cursor = connection.cursor()
         decisions: list[dict[str, Any]] = []
         if table_exists(connection, "auto_paper_decisions"):
@@ -358,7 +365,7 @@ def load_telemetry_context(
 ) -> dict[str, Any]:
     if not db_path.exists():
         return {"available": False}
-    with sqlite3.connect(db_path) as connection:
+    with connect_db(db_path) as connection:
         if not table_exists(connection, "telemetry_signal_evaluations"):
             return {"available": False}
         where, params = where_clause(since_ms, strategy, symbol, "captured_at", include_strategy=True)

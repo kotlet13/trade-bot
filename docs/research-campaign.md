@@ -195,7 +195,7 @@ Full result: `tmp/research_runs/ai_scorecard_v2_global_sweep_universe30_20260429
 
 ## Runtime Telemetry Archive
 
-Implemented on April 29, 2026 to make future analysis less dependent on ad hoc `tmp/` caches. The Rust runtime now creates SQLite archive tables for ticker snapshots, recent `1m/15m/1h/4h` candles, USD-M funding rows, USD-M futures metric rows, and `SignalAssistant` scorecard evaluations. The worker is low-frequency by default (`RUNTIME_TELEMETRY_INTERVAL_SECONDS=900`) and uses upserts so repeated cycles refresh recent rows instead of duplicating them.
+Implemented on April 29, 2026 to make future analysis less dependent on ad hoc `tmp/` caches. The Rust runtime now creates SQLite archive tables for ticker snapshots, recent `1m/15m/1h/4h` candles, USD-M funding rows, USD-M futures metric rows, and `SignalAssistant` scorecard evaluations. The worker is low-frequency by default (`RUNTIME_TELEMETRY_INTERVAL_SECONDS=900`), can be startup-staggered with `RUNTIME_TELEMETRY_INITIAL_DELAY_SECONDS`, and uses upserts so repeated cycles refresh recent rows instead of duplicating them.
 
 This is infrastructure only. It does not change `ai_score_v2_base_score7` or `ai_score_v2_ablate_oi`, does not promote research candidates, and does not add live exchange execution.
 

@@ -35,7 +35,9 @@ const DEFAULT_AUTO_PAPER_MAX_OPEN_SLOTS: usize = 1;
 const DEFAULT_AUTO_PAPER_MAX_DAILY_ENTRIES: usize = 3;
 const DEFAULT_AUTO_PAPER_MAX_DAILY_LOSS_PERCENT: f64 = 2.0;
 const DEFAULT_RUNTIME_TELEMETRY_INTERVAL_SECONDS: u64 = 900;
+const DEFAULT_RUNTIME_TELEMETRY_INITIAL_DELAY_SECONDS: u64 = 0;
 const DEFAULT_RUNTIME_TELEMETRY_CANDLE_LIMIT: usize = 240;
+const SQLITE_BUSY_TIMEOUT_SECONDS: u64 = 30;
 const DEFAULT_RUNTIME_TELEMETRY_FUNDING_LOOKBACK_HOURS: f64 = 72.0;
 const TELEMETRY_CANDLE_INTERVALS: &[&str] = &["1m", "15m", "1h", "4h"];
 const ACTIVE_PAPER_STRATEGY_VERSION: &str = "ai_score_v2_base_score7";
@@ -130,6 +132,7 @@ struct AutoPaperConfig {
 struct RuntimeTelemetryConfig {
     enabled: bool,
     interval_seconds: u64,
+    initial_delay_seconds: u64,
     candle_limit: usize,
     futures_enabled: bool,
     signal_evaluations_enabled: bool,
@@ -816,6 +819,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .and_then(|value| value.parse().ok())
             .unwrap_or(DEFAULT_RUNTIME_TELEMETRY_INTERVAL_SECONDS)
             .max(60),
+        initial_delay_seconds: env::var("RUNTIME_TELEMETRY_INITIAL_DELAY_SECONDS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(DEFAULT_RUNTIME_TELEMETRY_INITIAL_DELAY_SECONDS),
         candle_limit: env::var("RUNTIME_TELEMETRY_CANDLE_LIMIT")
             .ok()
             .and_then(|value| value.parse().ok())
@@ -1327,7 +1334,7 @@ fn initialize_database(
     starting_cash: f64,
     fee_bps: f64,
 ) -> Result<(), ApiError> {
-    connection.busy_timeout(Duration::from_secs(5))?;
+    connection.busy_timeout(Duration::from_secs(SQLITE_BUSY_TIMEOUT_SECONDS))?;
     connection.execute_batch(
         "
         PRAGMA journal_mode = DELETE;
@@ -2914,12 +2921,17 @@ fn update_auto_paper_decision_failure(
 
 async fn runtime_telemetry_worker(state: AppState) {
     println!(
-        "runtime telemetry enabled: interval={}s, candle_limit={}, futures={}, signal_evaluations={}",
+        "runtime telemetry enabled: interval={}s, initial_delay={}s, candle_limit={}, futures={}, signal_evaluations={}",
         state.telemetry.interval_seconds,
+        state.telemetry.initial_delay_seconds,
         state.telemetry.candle_limit,
         state.telemetry.futures_enabled,
         state.telemetry.signal_evaluations_enabled
     );
+
+    if state.telemetry.initial_delay_seconds > 0 {
+        tokio::time::sleep(Duration::from_secs(state.telemetry.initial_delay_seconds)).await;
+    }
 
     let mut ticker = tokio::time::interval(Duration::from_secs(state.telemetry.interval_seconds));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);

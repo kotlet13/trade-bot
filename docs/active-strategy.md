@@ -76,6 +76,7 @@ Runtime telemetry:
 
 - `RUNTIME_TELEMETRY_ENABLED=true` archives public market data into `data/tradebot.db`.
 - The archive stores recent ticker snapshots, `1m/15m/1h/4h` candles, USD-M funding, USD-M futures positioning rows, and `SignalAssistant` scorecard evaluations.
+- Compose sets `RUNTIME_TELEMETRY_INITIAL_DELAY_SECONDS=120` so startup news/diagnostic sidecars finish their SQLite work before the runtime telemetry writer begins.
 - Telemetry is analysis-only. It does not change the active paper strategies, force entries, or enable live exchange execution.
 
 Telemetry report:

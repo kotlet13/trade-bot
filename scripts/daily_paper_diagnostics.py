@@ -16,6 +16,7 @@ from typing import Any
 DEFAULT_DB_PATH = Path("data/tradebot.db")
 DEFAULT_BASE_URL = "http://localhost:8081"
 DEFAULT_SYMBOLS = "ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT"
+SQLITE_BUSY_TIMEOUT_MS = 30_000
 
 
 @dataclass(frozen=True)
@@ -39,7 +40,8 @@ def table_exists(connection: sqlite3.Connection, name: str) -> bool:
 def db_has_tables(db_path: Path, names: list[str]) -> bool:
     if not db_path.exists():
         return False
-    with sqlite3.connect(db_path) as connection:
+    with sqlite3.connect(db_path, timeout=SQLITE_BUSY_TIMEOUT_MS / 1000) as connection:
+        connection.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
         return all(table_exists(connection, name) for name in names)
 
 
